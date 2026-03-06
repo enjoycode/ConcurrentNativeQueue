@@ -1,0 +1,721 @@
+using System.Runtime.InteropServices;
+using ConcurrentNativeQueueLibrary;
+
+namespace ConcurrentNativeQueueUnitTest;
+
+/// <summary>
+/// <see cref="ConcurrentNativeQueue{T}"/> 单元测试
+/// </summary>
+public class ConcurrentNativeQueueUnitTest
+{
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Vector3D
+    {
+        public double X, Y, Z;
+
+        public Vector3D(double x, double y, double z) => (X, Y, Z) = (x, y, z);
+
+        public override readonly bool Equals(object? obj) =>
+            obj is Vector3D v && X == v.X && Y == v.Y && Z == v.Z;
+
+        public override readonly int GetHashCode() => HashCode.Combine(X, Y, Z);
+    }
+
+    #region 构造与基础属性
+
+    [Fact]
+    public void Constructor_Default_CreatesEmptyQueue()
+    {
+        using var queue = new ConcurrentNativeQueue<int>();
+
+        Assert.Equal(0, queue.Count);
+        Assert.True(queue.IsEmpty);
+        Assert.Equal(16, queue.Capacity);
+    }
+
+    [Theory]
+    [InlineData(1, 2)]
+    [InlineData(2, 2)]
+    [InlineData(3, 4)]
+    [InlineData(5, 8)]
+    [InlineData(17, 32)]
+    [InlineData(64, 64)]
+    public void Constructor_Capacity_RoundsUpToPowerOfTwo(int requested, int expected)
+    {
+        using var queue = new ConcurrentNativeQueue<int>(requested);
+
+        Assert.Equal(expected, queue.Capacity);
+        Assert.Equal(0, queue.Count);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Constructor_InvalidCapacity_Throws(int capacity)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ConcurrentNativeQueue<int>(capacity));
+    }
+
+    [Fact]
+    public void Constructor_Capacity1_RoundsUpTo2()
+    {
+        using var queue = new ConcurrentNativeQueue<int>(1);
+        Assert.Equal(2, queue.Capacity);
+
+        queue.Enqueue(42);
+        queue.Enqueue(99);
+        Assert.Equal(2, queue.Count);
+        Assert.Equal(2, queue.Capacity);
+
+        Assert.True(queue.TryDequeue(out int a));
+        Assert.Equal(42, a);
+        Assert.True(queue.TryDequeue(out int b));
+        Assert.Equal(99, b);
+        Assert.True(queue.IsEmpty);
+    }
+
+    #endregion
+
+    #region 入队出队基础逻辑
+
+    [Fact]
+    public void Enqueue_SingleItem_CountBecomesOne()
+    {
+        using var queue = new ConcurrentNativeQueue<int>();
+
+        queue.Enqueue(42);
+
+        Assert.Equal(1, queue.Count);
+        Assert.False(queue.IsEmpty);
+    }
+
+    [Fact]
+    public void TryDequeue_EmptyQueue_ReturnsFalse()
+    {
+        using var queue = new ConcurrentNativeQueue<int>();
+
+        bool result = queue.TryDequeue(out int item);
+
+        Assert.False(result);
+        Assert.Equal(0, item);
+    }
+
+    [Fact]
+    public void TryDequeue_EmptyQueue_MultipleTimes_ThenEnqueue_StillWorks()
+    {
+        using var queue = new ConcurrentNativeQueue<int>();
+
+        for (int i = 0; i < 50; i++)
+            Assert.False(queue.TryDequeue(out _));
+
+        queue.Enqueue(7);
+        Assert.True(queue.TryDequeue(out int item));
+        Assert.Equal(7, item);
+    }
+
+    [Fact]
+    public void TryDequeue_SingleItem_ReturnsCorrectValue()
+    {
+        using var queue = new ConcurrentNativeQueue<int>();
+        queue.Enqueue(99);
+
+        bool result = queue.TryDequeue(out int item);
+
+        Assert.True(result);
+        Assert.Equal(99, item);
+        Assert.True(queue.IsEmpty);
+    }
+
+    [Fact]
+    public void EnqueueDequeue_FIFO_Order()
+    {
+        using var queue = new ConcurrentNativeQueue<int>();
+        int count = 100;
+
+        for (int i = 0; i < count; i++)
+            queue.Enqueue(i);
+
+        for (int i = 0; i < count; i++)
+        {
+            Assert.True(queue.TryDequeue(out int item));
+            Assert.Equal(i, item);
+        }
+
+        Assert.True(queue.IsEmpty);
+    }
+
+    [Fact]
+    public void EnqueueDequeue_Interleaved_MaintainsFIFO()
+    {
+        using var queue = new ConcurrentNativeQueue<int>();
+
+        for (int round = 0; round < 10; round++)
+        {
+            for (int i = 0; i < 5; i++)
+                queue.Enqueue(round * 5 + i);
+
+            for (int i = 0; i < 5; i++)
+            {
+                Assert.True(queue.TryDequeue(out int item));
+                Assert.Equal(round * 5 + i, item);
+            }
+        }
+
+        Assert.True(queue.IsEmpty);
+    }
+
+    [Fact]
+    public void EnqueueDequeue_LargeStruct_PreservesAllFields()
+    {
+        using var queue = new ConcurrentNativeQueue<Vector3D>();
+
+        for (int i = 0; i < 50; i++)
+            queue.Enqueue(new Vector3D(i, i * 1.5, i * 2.0));
+
+        for (int i = 0; i < 50; i++)
+        {
+            Assert.True(queue.TryDequeue(out var item));
+            Assert.Equal(new Vector3D(i, i * 1.5, i * 2.0), item);
+        }
+    }
+
+    [Fact]
+    public void Count_AccurateAfterMixedOperations()
+    {
+        using var queue = new ConcurrentNativeQueue<int>();
+
+        Assert.Equal(0, queue.Count);
+
+        for (int i = 0; i < 10; i++)
+            queue.Enqueue(i);
+        Assert.Equal(10, queue.Count);
+
+        for (int i = 0; i < 3; i++)
+            queue.TryDequeue(out _);
+        Assert.Equal(7, queue.Count);
+
+        for (int i = 0; i < 5; i++)
+            queue.Enqueue(i);
+        Assert.Equal(12, queue.Count);
+
+        for (int i = 0; i < 12; i++)
+            queue.TryDequeue(out _);
+        Assert.Equal(0, queue.Count);
+        Assert.True(queue.IsEmpty);
+    }
+
+    #endregion
+
+    #region 环形缓冲区回绕
+
+    [Fact]
+    public void RingBuffer_WrapAround_CorrectBehavior()
+    {
+        using var queue = new ConcurrentNativeQueue<int>(4);
+        Assert.Equal(4, queue.Capacity);
+
+        for (int cycle = 0; cycle < 10; cycle++)
+        {
+            for (int i = 0; i < 3; i++)
+                queue.Enqueue(cycle * 3 + i);
+
+            for (int i = 0; i < 3; i++)
+            {
+                Assert.True(queue.TryDequeue(out int item));
+                Assert.Equal(cycle * 3 + i, item);
+            }
+        }
+
+        Assert.Equal(4, queue.Capacity);
+    }
+
+    [Fact]
+    public void FillToExactCapacity_NoGrow_ThenDrainAll()
+    {
+        using var queue = new ConcurrentNativeQueue<int>(8);
+        Assert.Equal(8, queue.Capacity);
+
+        for (int i = 0; i < 8; i++)
+            queue.Enqueue(i);
+
+        Assert.Equal(8, queue.Capacity);
+        Assert.Equal(8, queue.Count);
+
+        for (int i = 0; i < 8; i++)
+        {
+            Assert.True(queue.TryDequeue(out int item));
+            Assert.Equal(i, item);
+        }
+
+        Assert.True(queue.IsEmpty);
+    }
+
+    [Fact]
+    public void ReuseAfterFullDrain_HighPositionNumbers()
+    {
+        using var queue = new ConcurrentNativeQueue<int>(4);
+
+        for (int cycle = 0; cycle < 100; cycle++)
+        {
+            for (int i = 0; i < 4; i++)
+                queue.Enqueue(cycle * 4 + i);
+
+            for (int i = 0; i < 4; i++)
+            {
+                Assert.True(queue.TryDequeue(out int item));
+                Assert.Equal(cycle * 4 + i, item);
+            }
+
+            Assert.True(queue.IsEmpty);
+        }
+
+        Assert.Equal(4, queue.Capacity);
+    }
+
+    #endregion
+
+    #region 自动扩容
+
+    [Fact]
+    public void AutoGrow_ExceedCapacity_DoublesBuffer()
+    {
+        using var queue = new ConcurrentNativeQueue<int>(4);
+        Assert.Equal(4, queue.Capacity);
+
+        for (int i = 0; i < 5; i++)
+            queue.Enqueue(i);
+
+        Assert.Equal(8, queue.Capacity);
+        Assert.Equal(5, queue.Count);
+
+        for (int i = 0; i < 5; i++)
+        {
+            Assert.True(queue.TryDequeue(out int item));
+            Assert.Equal(i, item);
+        }
+    }
+
+    [Fact]
+    public void AutoGrow_MultipleGrows_DataIntact()
+    {
+        using var queue = new ConcurrentNativeQueue<int>(2);
+        Assert.Equal(2, queue.Capacity);
+
+        int total = 100;
+        for (int i = 0; i < total; i++)
+            queue.Enqueue(i);
+
+        Assert.True(queue.Capacity >= total);
+
+        for (int i = 0; i < total; i++)
+        {
+            Assert.True(queue.TryDequeue(out int item));
+            Assert.Equal(i, item);
+        }
+    }
+
+    [Fact]
+    public void AutoGrow_AfterPartialDequeue_CorrectCapacity()
+    {
+        using var queue = new ConcurrentNativeQueue<int>(4);
+
+        for (int i = 0; i < 3; i++)
+            queue.Enqueue(i);
+        for (int i = 0; i < 2; i++)
+            queue.TryDequeue(out _);
+
+        Assert.Equal(4, queue.Capacity);
+
+        for (int i = 3; i < 7; i++)
+            queue.Enqueue(i);
+
+        Assert.True(queue.Capacity >= 5);
+
+        for (int i = 2; i < 7; i++)
+        {
+            Assert.True(queue.TryDequeue(out int item));
+            Assert.Equal(i, item);
+        }
+    }
+
+    [Fact]
+    public void AutoGrow_LargeStruct_DataIntact()
+    {
+        using var queue = new ConcurrentNativeQueue<Vector3D>(2);
+
+        for (int i = 0; i < 20; i++)
+            queue.Enqueue(new Vector3D(i, -i, i * 0.1));
+
+        Assert.True(queue.Capacity >= 20);
+
+        for (int i = 0; i < 20; i++)
+        {
+            Assert.True(queue.TryDequeue(out var item));
+            Assert.Equal(new Vector3D(i, -i, i * 0.1), item);
+        }
+    }
+
+    #endregion
+
+    #region 自动收缩
+
+    [Fact]
+    public void AutoShrink_UtilizationBelowQuarter_Shrinks()
+    {
+        using var queue = new ConcurrentNativeQueue<int>(4);
+
+        for (int i = 0; i < 64; i++)
+            queue.Enqueue(i);
+
+        int grownCapacity = queue.Capacity;
+        Assert.True(grownCapacity >= 64);
+
+        for (int i = 0; i < 64; i++)
+            queue.TryDequeue(out _);
+
+        Assert.True(queue.Capacity < grownCapacity,
+            $"Capacity should have shrunk from {grownCapacity}, but is {queue.Capacity}");
+    }
+
+    [Fact]
+    public void AutoShrink_NeverBelowDefaultCapacity()
+    {
+        using var queue = new ConcurrentNativeQueue<int>();
+
+        for (int i = 0; i < 100; i++)
+            queue.Enqueue(i);
+        for (int i = 0; i < 100; i++)
+            queue.TryDequeue(out _);
+
+        Assert.True(queue.Capacity >= 16,
+            $"Capacity should never go below 16, but is {queue.Capacity}");
+    }
+
+    [Fact]
+    public void AutoShrink_DataIntactAfterShrink()
+    {
+        using var queue = new ConcurrentNativeQueue<int>(4);
+
+        for (int i = 0; i < 64; i++)
+            queue.Enqueue(i);
+
+        for (int i = 0; i < 60; i++)
+            queue.TryDequeue(out _);
+
+        int remaining = queue.Count;
+        Assert.True(remaining > 0);
+
+        for (int i = 60; i < 64; i++)
+        {
+            Assert.True(queue.TryDequeue(out int item));
+            Assert.Equal(i, item);
+        }
+    }
+
+    [Fact]
+    public void AutoShrink_ExactQuarterUtilization_DoesNotShrink()
+    {
+        using var queue = new ConcurrentNativeQueue<int>(32);
+
+        for (int i = 0; i < 32; i++)
+            queue.Enqueue(i);
+
+        Assert.Equal(32, queue.Capacity);
+
+        for (int i = 0; i < 24; i++)
+            queue.TryDequeue(out _);
+
+        Assert.Equal(8, queue.Count);
+        Assert.Equal(32, queue.Capacity);
+    }
+
+    [Fact]
+    public void AutoShrink_BelowQuarterByOne_Shrinks()
+    {
+        using var queue = new ConcurrentNativeQueue<int>(32);
+
+        for (int i = 0; i < 32; i++)
+            queue.Enqueue(i);
+
+        Assert.Equal(32, queue.Capacity);
+
+        for (int i = 0; i < 25; i++)
+            queue.TryDequeue(out _);
+
+        Assert.Equal(7, queue.Count);
+        Assert.Equal(16, queue.Capacity);
+    }
+
+    [Fact]
+    public void AutoShrink_HighUtilization_DoesNotShrink()
+    {
+        using var queue = new ConcurrentNativeQueue<int>(4);
+
+        for (int i = 0; i < 32; i++)
+            queue.Enqueue(i);
+
+        int grownCapacity = queue.Capacity;
+
+        for (int i = 0; i < 8; i++)
+            queue.TryDequeue(out _);
+
+        Assert.Equal(grownCapacity, queue.Capacity);
+    }
+
+    [Fact]
+    public void AutoShrink_GrowShrinkCycle_WorksCorrectly()
+    {
+        using var queue = new ConcurrentNativeQueue<int>(4);
+
+        for (int cycle = 0; cycle < 5; cycle++)
+        {
+            for (int i = 0; i < 64; i++)
+                queue.Enqueue(cycle * 64 + i);
+
+            Assert.True(queue.Capacity >= 64);
+
+            for (int i = 0; i < 64; i++)
+            {
+                Assert.True(queue.TryDequeue(out int item));
+                Assert.Equal(cycle * 64 + i, item);
+            }
+
+            Assert.True(queue.Capacity < 64,
+                $"Cycle {cycle}: capacity should have shrunk, but is {queue.Capacity}");
+        }
+    }
+
+    [Fact]
+    public void AutoShrink_LargeStruct_DataIntactAfterShrink()
+    {
+        using var queue = new ConcurrentNativeQueue<Vector3D>(4);
+
+        for (int i = 0; i < 64; i++)
+            queue.Enqueue(new Vector3D(i, i * 2.0, i * 3.0));
+
+        for (int i = 0; i < 60; i++)
+            queue.TryDequeue(out _);
+
+        for (int i = 60; i < 64; i++)
+        {
+            Assert.True(queue.TryDequeue(out var item));
+            Assert.Equal(new Vector3D(i, i * 2.0, i * 3.0), item);
+        }
+    }
+
+    #endregion
+
+    #region 并发 MPSC 测试
+
+    [Fact]
+    public void MPSC_MultipleProducers_SingleConsumer_AllItemsReceived()
+    {
+        using var queue = new ConcurrentNativeQueue<long>();
+        const int producerCount = 4;
+        const int itemsPerProducer = 10_000;
+
+        var barrier = new Barrier(producerCount + 1);
+        var producerTasks = new Task[producerCount];
+
+        for (int p = 0; p < producerCount; p++)
+        {
+            int producerId = p;
+            producerTasks[p] = Task.Run(() =>
+            {
+                barrier.SignalAndWait();
+                for (int i = 0; i < itemsPerProducer; i++)
+                    queue.Enqueue(producerId * itemsPerProducer + i);
+            });
+        }
+
+        var received = new HashSet<long>();
+        int totalExpected = producerCount * itemsPerProducer;
+        var consumerTask = Task.Run(() =>
+        {
+            barrier.SignalAndWait();
+            while (received.Count < totalExpected)
+            {
+                if (queue.TryDequeue(out long item))
+                    received.Add(item);
+                else
+                    Thread.SpinWait(10);
+            }
+        });
+
+        Task.WaitAll([.. producerTasks, consumerTask]);
+
+        Assert.Equal(totalExpected, received.Count);
+        for (int p = 0; p < producerCount; p++)
+            for (int i = 0; i < itemsPerProducer; i++)
+                Assert.Contains((long)p * itemsPerProducer + i, received);
+    }
+
+    [Fact]
+    public void MPSC_ProducersFIFO_PerProducerOrdering()
+    {
+        using var queue = new ConcurrentNativeQueue<long>();
+        const int producerCount = 4;
+        const int itemsPerProducer = 5_000;
+
+        var barrier = new Barrier(producerCount + 1);
+        var producerTasks = new Task[producerCount];
+
+        for (int p = 0; p < producerCount; p++)
+        {
+            int producerId = p;
+            producerTasks[p] = Task.Run(() =>
+            {
+                barrier.SignalAndWait();
+                for (int i = 0; i < itemsPerProducer; i++)
+                    queue.Enqueue((long)producerId << 32 | (uint)i);
+            });
+        }
+
+        int totalExpected = producerCount * itemsPerProducer;
+        var lastSeen = new Dictionary<int, int>();
+        int dequeued = 0;
+
+        var consumerTask = Task.Run(() =>
+        {
+            barrier.SignalAndWait();
+            while (dequeued < totalExpected)
+            {
+                if (queue.TryDequeue(out long item))
+                {
+                    int pid = (int)(item >> 32);
+                    int seq = (int)(item & 0xFFFFFFFF);
+
+                    if (lastSeen.TryGetValue(pid, out int last))
+                        Assert.True(seq > last,
+                            $"Producer {pid}: expected seq > {last}, got {seq}");
+
+                    lastSeen[pid] = seq;
+                    dequeued++;
+                }
+                else
+                {
+                    Thread.SpinWait(10);
+                }
+            }
+        });
+
+        Task.WaitAll([.. producerTasks, consumerTask]);
+        Assert.Equal(totalExpected, dequeued);
+    }
+
+    [Fact]
+    public void MPSC_WithAutoGrow_AllItemsReceived()
+    {
+        using var queue = new ConcurrentNativeQueue<int>(2);
+        const int producerCount = 4;
+        const int itemsPerProducer = 2_000;
+
+        var barrier = new Barrier(producerCount + 1);
+        var producerTasks = new Task[producerCount];
+
+        for (int p = 0; p < producerCount; p++)
+        {
+            int producerId = p;
+            producerTasks[p] = Task.Run(() =>
+            {
+                barrier.SignalAndWait();
+                for (int i = 0; i < itemsPerProducer; i++)
+                    queue.Enqueue(producerId * itemsPerProducer + i);
+            });
+        }
+
+        int totalExpected = producerCount * itemsPerProducer;
+        var received = new HashSet<int>();
+        var consumerTask = Task.Run(() =>
+        {
+            barrier.SignalAndWait();
+            while (received.Count < totalExpected)
+            {
+                if (queue.TryDequeue(out int item))
+                    received.Add(item);
+                else
+                    Thread.SpinWait(10);
+            }
+        });
+
+        Task.WaitAll([.. producerTasks, consumerTask]);
+        Assert.Equal(totalExpected, received.Count);
+    }
+
+    [Fact]
+    public void MPSC_WithGrowAndShrink_DataIntegrity()
+    {
+        using var queue = new ConcurrentNativeQueue<long>(2);
+        const int producerCount = 4;
+        const int batchSize = 500;
+        const int batchCount = 10;
+
+        int totalExpected = producerCount * batchSize * batchCount;
+        var received = new HashSet<long>();
+
+        var consumerTask = Task.Run(() =>
+        {
+            while (received.Count < totalExpected)
+            {
+                if (queue.TryDequeue(out long item))
+                    received.Add(item);
+                else
+                    Thread.SpinWait(10);
+            }
+        });
+
+        for (int batch = 0; batch < batchCount; batch++)
+        {
+            var barrier = new Barrier(producerCount);
+            var tasks = new Task[producerCount];
+
+            for (int p = 0; p < producerCount; p++)
+            {
+                int producerId = p;
+                int b = batch;
+                tasks[p] = Task.Run(() =>
+                {
+                    barrier.SignalAndWait();
+                    for (int i = 0; i < batchSize; i++)
+                    {
+                        long value = (long)b * producerCount * batchSize
+                                   + (long)producerId * batchSize + i;
+                        queue.Enqueue(value);
+                    }
+                });
+            }
+
+            Task.WaitAll(tasks);
+            Thread.Sleep(10);
+        }
+
+        consumerTask.Wait();
+        Assert.Equal(totalExpected, received.Count);
+    }
+
+    #endregion
+
+    #region Dispose
+
+    [Fact]
+    public void Dispose_ReleasesMemory_DoesNotThrow()
+    {
+        var queue = new ConcurrentNativeQueue<int>();
+        queue.Enqueue(1);
+        queue.Enqueue(2);
+
+        queue.Dispose();
+    }
+
+    [Fact]
+    public void Dispose_CalledTwice_DoesNotThrow()
+    {
+        var queue = new ConcurrentNativeQueue<int>();
+        queue.Enqueue(1);
+
+        queue.Dispose();
+        queue.Dispose();
+    }
+
+    #endregion
+}

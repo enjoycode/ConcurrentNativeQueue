@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="ConcurrentNativeQueueLibrary/ConcurrentNativeQueueLibrary.csproj" />
+  <Project Path="ConcurrentNativeQueueBenchmark/ConcurrentNativeQueueBenchmark.csproj" />
+  <Project Path="ConcurrentNativeQueueDemo/ConcurrentNativeQueueDemo.csproj" />
+  <Project Path="ConcurrentNativeQueueUnitTest/ConcurrentNativeQueueUnitTest.csproj" />
+</Solution>
