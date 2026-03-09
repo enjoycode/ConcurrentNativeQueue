@@ -1,6 +1,6 @@
 # ConcurrentNativeQueue\<T\>
 
-高性能无锁 MPSC（多生产者单消费者）原生队列，基于 CAS 环形缓冲区实现，适用于 .NET 10。
+高性能无锁 MPSC（多生产者单消费者）原生队列，基于 CAS 环形缓冲区实现，适用于 .NET 6+。
 
 底层使用 `NativeMemory` 分配内存，**零 GC 压力**；支持自动扩容与收缩，无需手动管理缓冲区容量。
 
@@ -153,7 +153,7 @@ dotnet run --project ConcurrentNativeQueueBenchmark -c Release -- --filter *
 
 ## 要求
 
-- .NET 10 SDK
+- .NET SDK 6.0 或更高。
 - 允许 `unsafe` 代码（已在项目文件中启用）
 
 ## 许可证

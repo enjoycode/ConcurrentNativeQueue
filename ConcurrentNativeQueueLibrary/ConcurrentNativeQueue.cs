@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -39,7 +39,12 @@ public unsafe struct ConcurrentNativeQueue<T> : IDisposable where T : unmanaged
 
     public ConcurrentNativeQueue(int capacity)
     {
+#if NET8_0_OR_GREATER
         ArgumentOutOfRangeException.ThrowIfLessThan(capacity, 1);
+#else
+            if (capacity < 1)
+                throw new ArgumentOutOfRangeException(nameof(capacity), capacity, "Capacity must be greater than 0.");
+#endif
         capacity = Math.Max(2, (int)BitOperations.RoundUpToPowerOf2((uint)capacity));
 
         _bufferMask = capacity - 1;

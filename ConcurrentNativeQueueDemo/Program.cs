@@ -1,8 +1,8 @@
-using System.Text;
+﻿using System.Text;
 using ConcurrentNativeQueueLibrary;
 
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-Console.OutputEncoding = Encoding.Unicode;
+Console.OutputEncoding = Encoding.UTF8;
 
 const int ProducerCount = 4;
 const int ItemsPerProducer = 50_000;
