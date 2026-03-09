@@ -1,3 +1,5 @@
+**[English](README.en-US.md)** | 简体中文
+
 # ConcurrentNativeQueue\<T\>
 
 高性能无锁 MPSC（多生产者单消费者）原生队列，基于 CAS 环形缓冲区实现，适用于 .NET 6+。
