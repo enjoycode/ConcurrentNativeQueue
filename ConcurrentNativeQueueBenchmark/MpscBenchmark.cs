@@ -23,7 +23,7 @@ public class MpscBenchmark
     public void Setup()
     {
         _nativeQueue.Dispose();
-        _nativeQueue = new ConcurrentNativeQueue<long>(TotalItems);
+        _nativeQueue = new ConcurrentNativeQueue<long>();
         _managedQueue = new ConcurrentQueue<long>();
     }
 

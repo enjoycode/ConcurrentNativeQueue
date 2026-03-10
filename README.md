@@ -2,9 +2,9 @@
 
 # ConcurrentNativeQueue\<T\>
 
-高性能无锁 MPSC（多生产者单消费者）原生队列，基于 CAS 环形缓冲区实现，适用于 .NET 6+。
+高性能无锁 MPSC（多生产者单消费者）原生队列，基于分段链表设计，适用于 .NET 6+。
 
-底层使用 `NativeMemory` 分配内存，**零 GC 压力**；支持自动扩容与收缩，无需手动管理缓冲区容量。
+槽位数据使用 `NativeMemory` 分配，**零 GC 压力**；段满时自动分配新段链接到尾部，段消费完后自动释放，无需手动管理容量。
 
 > 注意：这是一个完全使用 `Claude Opus 4.6 High Thinking` 编写的项目。
 
@@ -14,10 +14,10 @@
 
 ## 特性
 
-- **无锁并发** — 基于 CAS（Compare-And-Swap）的 MPSC 队列，多线程入队无需加锁
-- **原生内存** — 通过 `NativeMemory.AllocZeroed` 分配环形缓冲区，不产生托管堆分配
-- **自动伸缩** — 缓冲区满时自动翻倍扩容；利用率低于 25% 时自动缩容至一半（不低于默认容量 16）
-- **抖动抑制** — 扩容阈值（100%）与缩容阈值（25%）之间设有滞后区间，防止频繁伸缩
+- **无锁并发** — 入队通过 `Interlocked.Increment` 原子占位，成功后直接写入，无需 CAS 重试循环
+- **分段链表** — 固定大小的段按需分配并链接，段满时 O(1) 创建新段，无需全局暂停或缓冲区迁移
+- **原生内存** — 槽位数据通过 `NativeMemory.AllocZeroed` 分配，不产生托管堆分配
+- **自动回收** — 段被完全消费后自动释放其原生内存；段元数据由 GC 管理生命周期，确保并发安全
 - **FIFO 保序** — 单生产者视角下严格先入先出，多生产者时每个生产者的消息顺序不变
 - **非托管类型约束** — `where T : unmanaged`，支持 `int`、`long`、自定义值类型结构体等
 
@@ -26,7 +26,7 @@
 ```csharp
 using ConcurrentNativeQueueLibrary;
 
-// 创建队列（默认初始容量 16）
+// 创建队列（默认段大小 32）
 using var queue = new ConcurrentNativeQueue<long>();
 
 // 生产者线程入队
@@ -38,11 +38,11 @@ if (queue.TryDequeue(out long item))
     Console.WriteLine(item); // 42
 ```
 
-### 指定初始容量
+### 指定段大小
 
 ```csharp
-// 容量会自动向上取整到最近的 2 的幂
-using var queue = new ConcurrentNativeQueue<int>(1000); // 实际容量 1024
+// 段大小控制每个段的槽位数量，影响段切换频率与内存粒度
+using var queue = new ConcurrentNativeQueue<int>(128);
 ```
 
 ### MPSC 并发模式
@@ -84,51 +84,53 @@ Task.WaitAll(tasks);
 
 | 成员 | 说明 |
 |---|---|
-| `ConcurrentNativeQueue()` | 以默认容量 16 创建队列 |
-| `ConcurrentNativeQueue(int capacity)` | 以指定容量创建队列（向上取整为 2 的幂，最小为 2） |
-| `void Enqueue(T item)` | 入队。线程安全，支持多生产者并发调用。缓冲区满时自动扩容 |
+| `ConcurrentNativeQueue()` | 以默认段大小 32 创建队列 |
+| `ConcurrentNativeQueue(int segmentSize)` | 以指定段大小创建队列（最小为 2） |
+| `void Enqueue(T item)` | 入队。线程安全，支持多生产者并发调用。段满时自动分配新段 |
 | `bool TryDequeue(out T item)` | 出队。成功返回 `true`；队列为空返回 `false`。仅限单消费者调用 |
 | `int Count` | 当前元素数量（并发场景下为近似值） |
 | `bool IsEmpty` | 队列是否为空 |
-| `int Capacity` | 当前环形缓冲区容量 |
-| `void Dispose()` | 释放底层原生内存。可多次调用，不会抛出异常 |
+| `void Dispose()` | 释放所有段的原生内存。可多次调用，不会抛出异常 |
 
 ## 设计原理
 
-### 环形缓冲区 + 序列号
+### 分段链表 + 状态标记
 
-每个槽位包含一个 `Sequence` 字段，用于编码状态：
+队列由固定大小的段组成，每个段包含一个原生内存槽位数组。每个槽位有 `State` 字段标记写入状态：
 
-- `Sequence == 入队位置`：槽位空闲，可写入
-- `Sequence == 入队位置 + 1`：数据已就绪，可读取
+- `State == 0`：槽位空闲，尚未写入
+- `State == 1`：数据已就绪，可读取
 
-生产者通过 CAS 竞争 `_enqueuePos`，成功后写入数据并推进序列号；消费者检查序列号是否就绪后读取数据。
+生产者通过 `Interlocked.Increment` 原子递增段的 `EnqueuePos` 获得唯一写入位置，无需 CAS 重试。写入数据后设置 `State = 1` 通知消费者。
 
-### 自动扩容
+### 段生命周期
 
-当缓冲区满（`diff < 0`）时触发扩容：
+段元数据使用托管 `class`，由 GC 跟踪所有引用，确保即使生产者持有旧段引用也不会发生 use-after-free：
 
-1. 唯一胜出线程设置 `_resizing` 标志
-2. 等待所有正在执行的操作（`_activeOps`）退出
-3. 分配双倍容量新缓冲区，迁移有效元素
-4. 释放旧缓冲区，清除 `_resizing` 标志
+1. **段满** — 生产者检测到 `offset >= capacity`，通过 CAS 创建并链接新段到 `Next`，然后推进共享 `_tail` 指针
+2. **段消费完毕** — 消费者检测到 `offset >= capacity`，释放当前段的原生内存槽位，前进到 `Next` 段
+3. **安全性保证** — 消费者仅在段内所有槽位都被消费后才释放 `Slots`；此时任何持有旧段引用的生产者只会访问托管对象的元数据字段（`EnqueuePos`、`Next` 等），不会触及已释放的原生内存
 
-### 自动缩容
+### 相比旧版环形缓冲区的改进
 
-每次出队后检查利用率，当元素数 < 容量 / 4 且容量超过默认值时触发缩容。缩容失败（另一线程正在 resize）时直接放弃，下次再试。
+| 维度 | 旧实现（环形缓冲区） | 新实现（分段链表） |
+|---|---|---|
+| 每次操作原子指令 | `Interlocked.Inc` + CAS + `Interlocked.Dec` = 3次 | `Interlocked.Inc` 占位 = 1次 |
+| 扩容方式 | Stop-the-world + O(N) 迁移 | 分配新段 O(1)，CAS 链接 |
+| 缩容方式 | 显式 TryShrink + O(N) 迁移 | 段消费完后自动释放 |
 
 ## 项目结构
 
-```
+```bash
 ConcurrentNativeQueue/
 ├── ConcurrentNativeQueueLibrary/     # 核心库
 │   └── ConcurrentNativeQueue.cs
 ├── ConcurrentNativeQueueDemo/        # MPSC 演示程序（支持 AOT 发布）
 │   └── Program.cs
 ├── ConcurrentNativeQueueBenchmark/   # BenchmarkDotNet 性能基准
-│   ├── SequentialBenchmark.cs        #   单线程顺序吞吐量 vs ConcurrentQueue
 │   ├── MpscBenchmark.cs              #   多生产者单消费者并发吞吐量 vs ConcurrentQueue
-│   └── GrowthBenchmark.cs            #   预分配 vs 自动扩容开销
+│   ├── SequentialBenchmark.cs        #   单线程顺序吞吐量 vs ConcurrentQueue
+│   └── SegmentSizeBenchmark.cs       #   不同段大小对吞吐量的影响
 └── ConcurrentNativeQueueUnitTest/    # xUnit 单元测试
     └── ConcurrentNativeQueueUnitTest.cs
 ```

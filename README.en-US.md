@@ -2,9 +2,9 @@ English | **[简体中文](README.md)**
 
 # ConcurrentNativeQueue\<T\>
 
-A high-performance, lock-free MPSC (Multi-Producer, Single-Consumer) native queue built on a CAS ring buffer for .NET 6+.
+A high-performance, lock-free MPSC (Multi-Producer, Single-Consumer) native queue built on a segmented linked-list design for .NET 6+.
 
-Memory is allocated via `NativeMemory` with **zero GC pressure**. The buffer automatically grows and shrinks — no manual capacity management required.
+Slot data is allocated via `NativeMemory` with **zero GC pressure**. New segments are allocated on demand when full and automatically freed after consumption — no manual capacity management required.
 
 > Note: This project was entirely written using `Claude Opus 4.6 High Thinking`.
 
@@ -14,10 +14,10 @@ Memory is allocated via `NativeMemory` with **zero GC pressure**. The buffer aut
 
 ## Features
 
-- **Lock-free concurrency** — CAS-based MPSC queue; multiple threads can enqueue without locks
-- **Native memory** — Ring buffer allocated via `NativeMemory.AllocZeroed`; no managed heap allocations
-- **Auto-scaling** — Automatically doubles capacity when full; shrinks to half when utilization drops below 25% (never below the default capacity of 16)
-- **Jitter suppression** — Hysteresis between the grow threshold (100%) and shrink threshold (25%) prevents resize thrashing
+- **Lock-free concurrency** — Enqueue claims a slot via `Interlocked.Increment` and writes directly; no CAS retry loops required
+- **Segmented linked list** — Fixed-size segments are allocated and linked on demand; O(1) new segment creation when full, no global pauses or buffer migration
+- **Native memory** — Slot data allocated via `NativeMemory.AllocZeroed`; no managed heap allocations
+- **Automatic reclamation** — Consumed segments automatically free their native memory; segment metadata is GC-managed to ensure concurrent safety
 - **FIFO ordering** — Strict FIFO from a single producer's perspective; per-producer ordering is preserved across multiple producers
 - **Unmanaged type constraint** — `where T : unmanaged`; supports `int`, `long`, custom value-type structs, etc.
 
@@ -26,7 +26,7 @@ Memory is allocated via `NativeMemory` with **zero GC pressure**. The buffer aut
 ```csharp
 using ConcurrentNativeQueueLibrary;
 
-// Create a queue (default initial capacity: 16)
+// Create a queue (default segment size: 32)
 using var queue = new ConcurrentNativeQueue<long>();
 
 // Producer thread enqueues
@@ -38,11 +38,12 @@ if (queue.TryDequeue(out long item))
     Console.WriteLine(item); // 42
 ```
 
-### Specifying Initial Capacity
+### Specifying Segment Size
 
 ```csharp
-// Capacity is rounded up to the nearest power of two
-using var queue = new ConcurrentNativeQueue<int>(1000); // actual capacity: 1024
+// Segment size controls the number of slots per segment,
+// affecting segment transition frequency and memory granularity
+using var queue = new ConcurrentNativeQueue<int>(128);
 ```
 
 ### MPSC Concurrent Pattern
@@ -84,51 +85,53 @@ Task.WaitAll(tasks);
 
 | Member | Description |
 |---|---|
-| `ConcurrentNativeQueue()` | Creates a queue with the default capacity of 16 |
-| `ConcurrentNativeQueue(int capacity)` | Creates a queue with the specified capacity (rounded up to a power of two, minimum 2) |
-| `void Enqueue(T item)` | Enqueues an item. Thread-safe for multiple concurrent producers. Automatically grows when full |
+| `ConcurrentNativeQueue()` | Creates a queue with the default segment size of 32 |
+| `ConcurrentNativeQueue(int segmentSize)` | Creates a queue with the specified segment size (minimum 2) |
+| `void Enqueue(T item)` | Enqueues an item. Thread-safe for multiple concurrent producers. Allocates a new segment when full |
 | `bool TryDequeue(out T item)` | Dequeues an item. Returns `true` on success; `false` if the queue is empty. Single-consumer only |
 | `int Count` | Current number of elements (approximate under concurrency) |
 | `bool IsEmpty` | Whether the queue is empty |
-| `int Capacity` | Current ring buffer capacity |
-| `void Dispose()` | Frees the underlying native memory. Safe to call multiple times |
+| `void Dispose()` | Frees native memory for all segments. Safe to call multiple times |
 
 ## Design
 
-### Ring Buffer + Sequence Numbers
+### Segmented Linked List + State Flags
 
-Each slot contains a `Sequence` field that encodes its state:
+The queue consists of fixed-size segments, each containing a native memory slot array. Each slot has a `State` field indicating write status:
 
-- `Sequence == enqueue position` — slot is free and writable
-- `Sequence == enqueue position + 1` — data is ready to be consumed
+- `State == 0` — slot is empty, not yet written
+- `State == 1` — data is ready for consumption
 
-Producers compete for `_enqueuePos` via CAS. On success, the producer writes data and advances the sequence number. The consumer checks whether the sequence number indicates readiness before reading.
+Producers atomically increment the segment's `EnqueuePos` via `Interlocked.Increment` to claim a unique write position — no CAS retry needed. After writing data, the producer sets `State = 1` to signal the consumer.
 
-### Auto-Grow
+### Segment Lifecycle
 
-Growth is triggered when the buffer is full (`diff < 0`):
+Segment metadata uses a managed `class`, with the GC tracking all references to ensure that even if a producer holds a stale reference to an old segment, use-after-free cannot occur:
 
-1. A single winning thread sets the `_resizing` flag
-2. Waits for all in-flight operations (`_activeOps`) to drain
-3. Allocates a new buffer at double the capacity and migrates live elements
-4. Frees the old buffer and clears the `_resizing` flag
+1. **Segment full** — A producer detects `offset >= capacity`, creates a new segment via CAS on `Next`, then advances the shared `_tail` pointer
+2. **Segment consumed** — The consumer detects `offset >= capacity`, frees the current segment's native slot memory, and advances to the `Next` segment
+3. **Safety guarantee** — The consumer only frees `Slots` after all slots in the segment have been consumed; any producer still holding a stale reference only accesses managed metadata fields (`EnqueuePos`, `Next`, etc.) and never touches freed native memory
 
-### Auto-Shrink
+### Improvements over the Previous Ring Buffer Design
 
-After each dequeue, utilization is checked. When the element count falls below capacity / 4 and the capacity exceeds the default, the buffer is halved. If another thread is already resizing, the shrink attempt is abandoned and retried on the next dequeue.
+| Aspect | Old (Ring Buffer) | New (Segmented Linked List) |
+|---|---|---|
+| Atomic ops per operation | `Interlocked.Inc` + CAS + `Interlocked.Dec` = 3 | `Interlocked.Inc` to claim slot = 1 |
+| Growth strategy | Stop-the-world + O(N) migration | Allocate new segment O(1), CAS link |
+| Shrink strategy | Explicit TryShrink + O(N) migration | Automatic free after consumption |
 
 ## Project Structure
 
-```
+```bash
 ConcurrentNativeQueue/
 ├── ConcurrentNativeQueueLibrary/     # Core library
 │   └── ConcurrentNativeQueue.cs
 ├── ConcurrentNativeQueueDemo/        # MPSC demo app (AOT-publishable)
 │   └── Program.cs
 ├── ConcurrentNativeQueueBenchmark/   # BenchmarkDotNet benchmarks
-│   ├── SequentialBenchmark.cs        #   Single-thread sequential throughput vs ConcurrentQueue
 │   ├── MpscBenchmark.cs              #   MPSC concurrent throughput vs ConcurrentQueue
-│   └── GrowthBenchmark.cs            #   Pre-allocated vs auto-grow overhead
+│   ├── SequentialBenchmark.cs        #   Single-thread sequential throughput vs ConcurrentQueue
+│   └── SegmentSizeBenchmark.cs       #   Segment size impact on throughput
 └── ConcurrentNativeQueueUnitTest/    # xUnit unit tests
     └── ConcurrentNativeQueueUnitTest.cs
 ```

@@ -30,42 +30,24 @@ public class ConcurrentNativeQueueUnitTest
 
         Assert.Equal(0, queue.Count);
         Assert.True(queue.IsEmpty);
-        Assert.Equal(16, queue.Capacity);
-    }
-
-    [Theory]
-    [InlineData(1, 2)]
-    [InlineData(2, 2)]
-    [InlineData(3, 4)]
-    [InlineData(5, 8)]
-    [InlineData(17, 32)]
-    [InlineData(64, 64)]
-    public void Constructor_Capacity_RoundsUpToPowerOfTwo(int requested, int expected)
-    {
-        using var queue = new ConcurrentNativeQueue<int>(requested);
-
-        Assert.Equal(expected, queue.Capacity);
-        Assert.Equal(0, queue.Count);
     }
 
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
-    public void Constructor_InvalidCapacity_Throws(int capacity)
+    public void Constructor_InvalidSegmentSize_Throws(int segmentSize)
     {
-        Assert.Throws<ArgumentOutOfRangeException>(() => new ConcurrentNativeQueue<int>(capacity));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ConcurrentNativeQueue<int>(segmentSize));
     }
 
     [Fact]
-    public void Constructor_Capacity1_RoundsUpTo2()
+    public void Constructor_SegmentSize1_Works()
     {
         using var queue = new ConcurrentNativeQueue<int>(1);
-        Assert.Equal(2, queue.Capacity);
 
         queue.Enqueue(42);
         queue.Enqueue(99);
         Assert.Equal(2, queue.Count);
-        Assert.Equal(2, queue.Capacity);
 
         Assert.True(queue.TryDequeue(out int a));
         Assert.Equal(42, a);
@@ -206,13 +188,31 @@ public class ConcurrentNativeQueueUnitTest
 
     #endregion
 
-    #region 环形缓冲区回绕
+    #region 段切换
 
     [Fact]
-    public void RingBuffer_WrapAround_CorrectBehavior()
+    public void SegmentTransition_SmallSegments_FIFO()
     {
         using var queue = new ConcurrentNativeQueue<int>(4);
-        Assert.Equal(4, queue.Capacity);
+
+        for (int i = 0; i < 20; i++)
+            queue.Enqueue(i);
+
+        Assert.Equal(20, queue.Count);
+
+        for (int i = 0; i < 20; i++)
+        {
+            Assert.True(queue.TryDequeue(out int item));
+            Assert.Equal(i, item);
+        }
+
+        Assert.True(queue.IsEmpty);
+    }
+
+    [Fact]
+    public void SegmentTransition_Interleaved_CorrectBehavior()
+    {
+        using var queue = new ConcurrentNativeQueue<int>(4);
 
         for (int cycle = 0; cycle < 10; cycle++)
         {
@@ -226,19 +226,17 @@ public class ConcurrentNativeQueueUnitTest
             }
         }
 
-        Assert.Equal(4, queue.Capacity);
+        Assert.True(queue.IsEmpty);
     }
 
     [Fact]
-    public void FillToExactCapacity_NoGrow_ThenDrainAll()
+    public void FillExactSegment_ThenDrainAll()
     {
         using var queue = new ConcurrentNativeQueue<int>(8);
-        Assert.Equal(8, queue.Capacity);
 
         for (int i = 0; i < 8; i++)
             queue.Enqueue(i);
 
-        Assert.Equal(8, queue.Capacity);
         Assert.Equal(8, queue.Count);
 
         for (int i = 0; i < 8; i++)
@@ -251,7 +249,7 @@ public class ConcurrentNativeQueueUnitTest
     }
 
     [Fact]
-    public void ReuseAfterFullDrain_HighPositionNumbers()
+    public void RepeatedFullDrainCycles_HighPositionNumbers()
     {
         using var queue = new ConcurrentNativeQueue<int>(4);
 
@@ -268,45 +266,17 @@ public class ConcurrentNativeQueueUnitTest
 
             Assert.True(queue.IsEmpty);
         }
-
-        Assert.Equal(4, queue.Capacity);
-    }
-
-    #endregion
-
-    #region 自动扩容
-
-    [Fact]
-    public void AutoGrow_ExceedCapacity_DoublesBuffer()
-    {
-        using var queue = new ConcurrentNativeQueue<int>(4);
-        Assert.Equal(4, queue.Capacity);
-
-        for (int i = 0; i < 5; i++)
-            queue.Enqueue(i);
-
-        Assert.Equal(8, queue.Capacity);
-        Assert.Equal(5, queue.Count);
-
-        for (int i = 0; i < 5; i++)
-        {
-            Assert.True(queue.TryDequeue(out int item));
-            Assert.Equal(i, item);
-        }
     }
 
     [Fact]
-    public void AutoGrow_MultipleGrows_DataIntact()
+    public void MultipleSegments_LargeVolume_DataIntact()
     {
         using var queue = new ConcurrentNativeQueue<int>(2);
-        Assert.Equal(2, queue.Capacity);
 
         int total = 100;
         for (int i = 0; i < total; i++)
             queue.Enqueue(i);
 
-        Assert.True(queue.Capacity >= total);
-
         for (int i = 0; i < total; i++)
         {
             Assert.True(queue.TryDequeue(out int item));
@@ -315,7 +285,7 @@ public class ConcurrentNativeQueueUnitTest
     }
 
     [Fact]
-    public void AutoGrow_AfterPartialDequeue_CorrectCapacity()
+    public void SegmentTransition_AfterPartialDequeue_DataIntact()
     {
         using var queue = new ConcurrentNativeQueue<int>(4);
 
@@ -324,12 +294,8 @@ public class ConcurrentNativeQueueUnitTest
         for (int i = 0; i < 2; i++)
             queue.TryDequeue(out _);
 
-        Assert.Equal(4, queue.Capacity);
-
         for (int i = 3; i < 7; i++)
             queue.Enqueue(i);
-
-        Assert.True(queue.Capacity >= 5);
 
         for (int i = 2; i < 7; i++)
         {
@@ -339,167 +305,17 @@ public class ConcurrentNativeQueueUnitTest
     }
 
     [Fact]
-    public void AutoGrow_LargeStruct_DataIntact()
+    public void SegmentTransition_LargeStruct_DataIntact()
     {
         using var queue = new ConcurrentNativeQueue<Vector3D>(2);
 
         for (int i = 0; i < 20; i++)
             queue.Enqueue(new Vector3D(i, -i, i * 0.1));
 
-        Assert.True(queue.Capacity >= 20);
-
         for (int i = 0; i < 20; i++)
         {
             Assert.True(queue.TryDequeue(out var item));
             Assert.Equal(new Vector3D(i, -i, i * 0.1), item);
-        }
-    }
-
-    #endregion
-
-    #region 自动收缩
-
-    [Fact]
-    public void AutoShrink_UtilizationBelowQuarter_Shrinks()
-    {
-        using var queue = new ConcurrentNativeQueue<int>(4);
-
-        for (int i = 0; i < 64; i++)
-            queue.Enqueue(i);
-
-        int grownCapacity = queue.Capacity;
-        Assert.True(grownCapacity >= 64);
-
-        for (int i = 0; i < 64; i++)
-            queue.TryDequeue(out _);
-
-        Assert.True(queue.Capacity < grownCapacity,
-            $"Capacity should have shrunk from {grownCapacity}, but is {queue.Capacity}");
-    }
-
-    [Fact]
-    public void AutoShrink_NeverBelowDefaultCapacity()
-    {
-        using var queue = new ConcurrentNativeQueue<int>();
-
-        for (int i = 0; i < 100; i++)
-            queue.Enqueue(i);
-        for (int i = 0; i < 100; i++)
-            queue.TryDequeue(out _);
-
-        Assert.True(queue.Capacity >= 16,
-            $"Capacity should never go below 16, but is {queue.Capacity}");
-    }
-
-    [Fact]
-    public void AutoShrink_DataIntactAfterShrink()
-    {
-        using var queue = new ConcurrentNativeQueue<int>(4);
-
-        for (int i = 0; i < 64; i++)
-            queue.Enqueue(i);
-
-        for (int i = 0; i < 60; i++)
-            queue.TryDequeue(out _);
-
-        int remaining = queue.Count;
-        Assert.True(remaining > 0);
-
-        for (int i = 60; i < 64; i++)
-        {
-            Assert.True(queue.TryDequeue(out int item));
-            Assert.Equal(i, item);
-        }
-    }
-
-    [Fact]
-    public void AutoShrink_ExactQuarterUtilization_DoesNotShrink()
-    {
-        using var queue = new ConcurrentNativeQueue<int>(32);
-
-        for (int i = 0; i < 32; i++)
-            queue.Enqueue(i);
-
-        Assert.Equal(32, queue.Capacity);
-
-        for (int i = 0; i < 24; i++)
-            queue.TryDequeue(out _);
-
-        Assert.Equal(8, queue.Count);
-        Assert.Equal(32, queue.Capacity);
-    }
-
-    [Fact]
-    public void AutoShrink_BelowQuarterByOne_Shrinks()
-    {
-        using var queue = new ConcurrentNativeQueue<int>(32);
-
-        for (int i = 0; i < 32; i++)
-            queue.Enqueue(i);
-
-        Assert.Equal(32, queue.Capacity);
-
-        for (int i = 0; i < 25; i++)
-            queue.TryDequeue(out _);
-
-        Assert.Equal(7, queue.Count);
-        Assert.Equal(16, queue.Capacity);
-    }
-
-    [Fact]
-    public void AutoShrink_HighUtilization_DoesNotShrink()
-    {
-        using var queue = new ConcurrentNativeQueue<int>(4);
-
-        for (int i = 0; i < 32; i++)
-            queue.Enqueue(i);
-
-        int grownCapacity = queue.Capacity;
-
-        for (int i = 0; i < 8; i++)
-            queue.TryDequeue(out _);
-
-        Assert.Equal(grownCapacity, queue.Capacity);
-    }
-
-    [Fact]
-    public void AutoShrink_GrowShrinkCycle_WorksCorrectly()
-    {
-        using var queue = new ConcurrentNativeQueue<int>(4);
-
-        for (int cycle = 0; cycle < 5; cycle++)
-        {
-            for (int i = 0; i < 64; i++)
-                queue.Enqueue(cycle * 64 + i);
-
-            Assert.True(queue.Capacity >= 64);
-
-            for (int i = 0; i < 64; i++)
-            {
-                Assert.True(queue.TryDequeue(out int item));
-                Assert.Equal(cycle * 64 + i, item);
-            }
-
-            Assert.True(queue.Capacity < 64,
-                $"Cycle {cycle}: capacity should have shrunk, but is {queue.Capacity}");
-        }
-    }
-
-    [Fact]
-    public void AutoShrink_LargeStruct_DataIntactAfterShrink()
-    {
-        using var queue = new ConcurrentNativeQueue<Vector3D>(4);
-
-        for (int i = 0; i < 64; i++)
-            queue.Enqueue(new Vector3D(i, i * 2.0, i * 3.0));
-
-        for (int i = 0; i < 60; i++)
-            queue.TryDequeue(out _);
-
-        for (int i = 60; i < 64; i++)
-        {
-            Assert.True(queue.TryDequeue(out var item));
-            Assert.Equal(new Vector3D(i, i * 2.0, i * 3.0), item);
         }
     }
 
@@ -604,9 +420,9 @@ public class ConcurrentNativeQueueUnitTest
     }
 
     [Fact]
-    public void MPSC_WithAutoGrow_AllItemsReceived()
+    public void MPSC_WithSegmentTransitions_AllItemsReceived()
     {
-        using var queue = new ConcurrentNativeQueue<int>(2);
+        using var queue = new ConcurrentNativeQueue<int>(8);
         const int producerCount = 4;
         const int itemsPerProducer = 2_000;
 
@@ -643,9 +459,9 @@ public class ConcurrentNativeQueueUnitTest
     }
 
     [Fact]
-    public void MPSC_WithGrowAndShrink_DataIntegrity()
+    public void MPSC_MultipleBatches_DataIntegrity()
     {
-        using var queue = new ConcurrentNativeQueue<long>(2);
+        using var queue = new ConcurrentNativeQueue<long>(8);
         const int producerCount = 4;
         const int batchSize = 500;
         const int batchCount = 10;
