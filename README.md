@@ -14,10 +14,12 @@
 
 ## 特性
 
-- **无锁并发** — 入队通过 `Interlocked.Increment` 原子占位，成功后直接写入，无需 CAS 重试循环
+- **无锁并发** — 入队通过 `Volatile.Read` + `Interlocked.CompareExchange` (CAS) 占位，段满检测为纯读操作，不产生原子写开销
+- **批量入队** — `EnqueueRange` 单次 CAS 占位多个槽位，分摊原子操作开销；跨段时自动分批写入
 - **分段链表** — 固定大小的段按需分配并链接，段满时 O(1) 创建新段，无需全局暂停或缓冲区迁移
 - **原生内存** — 槽位数据通过 `NativeMemory.AllocZeroed` 分配，不产生托管堆分配
 - **自动回收** — 段被完全消费后自动释放其原生内存；段元数据由 GC 管理生命周期，确保并发安全
+- **False Sharing 防护** — 生产者/消费者热点字段通过缓存行填充隔离，`EnqueuePos` 使用 128 字节独占布局
 - **FIFO 保序** — 单生产者视角下严格先入先出，多生产者时每个生产者的消息顺序不变
 - **非托管类型约束** — `where T : unmanaged`，支持 `int`、`long`、自定义值类型结构体等
 
@@ -32,6 +34,13 @@ using var queue = new ConcurrentNativeQueue<long>();
 // 生产者线程入队
 queue.Enqueue(42);
 queue.Enqueue(100);
+
+// 批量入队
+queue.EnqueueRange(new long[] { 200, 300, 400 });
+
+// 查看头部元素（不移除）
+if (queue.TryPeek(out long head))
+    Console.WriteLine(head); // 42
 
 // 消费者线程出队
 if (queue.TryDequeue(out long item))
@@ -87,6 +96,8 @@ Task.WaitAll(tasks);
 | `ConcurrentNativeQueue()` | 以默认段大小 32 创建队列 |
 | `ConcurrentNativeQueue(int segmentSize)` | 以指定段大小创建队列（最小为 2） |
 | `void Enqueue(T item)` | 入队。线程安全，支持多生产者并发调用。段满时自动分配新段 |
+| `void EnqueueRange(ReadOnlySpan<T> items)` | 批量入队。单次 CAS 占位多个槽位，跨段时自动分批。线程安全 |
+| `bool TryPeek(out T item)` | 查看头部元素但不移除。成功返回 `true`；队列为空返回 `false`。仅限单消费者调用 |
 | `bool TryDequeue(out T item)` | 出队。成功返回 `true`；队列为空返回 `false`。仅限单消费者调用 |
 | `int Count` | 当前元素数量（并发场景下为近似值） |
 | `bool IsEmpty` | 队列是否为空 |
@@ -101,7 +112,9 @@ Task.WaitAll(tasks);
 - `State == 0`：槽位空闲，尚未写入
 - `State == 1`：数据已就绪，可读取
 
-生产者通过 `Interlocked.Increment` 原子递增段的 `EnqueuePos` 获得唯一写入位置，无需 CAS 重试。写入数据后设置 `State = 1` 通知消费者。
+生产者通过 `Volatile.Read` 读取当前 `EnqueuePos`，再用 `Interlocked.CompareExchange` (CAS) 原子占位。段满检测为纯读操作，不产生原子写开销。写入数据后通过 `Volatile.Write` 设置 `State = 1` 通知消费者。
+
+`EnqueueRange` 进一步优化：单次 CAS 占位 N 个槽位，先批量写入 Value，经 `Thread.MemoryBarrier()` 后再批量设置 State，将 N 次原子操作分摊为 ⌈N/段剩余容量⌉ 次。
 
 ### 段生命周期
 
@@ -115,7 +128,7 @@ Task.WaitAll(tasks);
 
 | 维度 | 旧实现（环形缓冲区） | 新实现（分段链表） |
 |---|---|---|
-| 每次操作原子指令 | `Interlocked.Inc` + CAS + `Interlocked.Dec` = 3次 | `Interlocked.Inc` 占位 = 1次 |
+| 每次操作原子指令 | `Interlocked.Inc` + CAS + `Interlocked.Dec` = 3次 | CAS 占位 = 1次（`EnqueueRange` 可 1 次占 N 个） |
 | 扩容方式 | Stop-the-world + O(N) 迁移 | 分配新段 O(1)，CAS 链接 |
 | 缩容方式 | 显式 TryShrink + O(N) 迁移 | 段消费完后自动释放 |
 
@@ -129,7 +142,8 @@ ConcurrentNativeQueue/
 │   └── Program.cs
 ├── ConcurrentNativeQueueBenchmark/   # BenchmarkDotNet 性能基准
 │   ├── MpscBenchmark.cs              #   多生产者单消费者并发吞吐量 vs ConcurrentQueue
-│   ├── SequentialBenchmark.cs        #   单线程顺序吞吐量 vs ConcurrentQueue
+│   ├── SequentialBenchmark.cs        #   单线程顺序吞吐量 vs ConcurrentQueue（含批量入队对比）
+│   ├── BatchEnqueueBenchmark.cs      #   EnqueueRange vs 逐条 Enqueue 吞吐量对比
 │   └── SegmentSizeBenchmark.cs       #   不同段大小对吞吐量的影响
 └── ConcurrentNativeQueueUnitTest/    # xUnit 单元测试
     └── ConcurrentNativeQueueUnitTest.cs

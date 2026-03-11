@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 using ConcurrentNativeQueueLibrary;
 
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
@@ -12,6 +12,25 @@ using var queue = new ConcurrentNativeQueue<long>();
 
 Console.WriteLine("=== ConcurrentNativeQueue<long> MPSC 示例 ===");
 Console.WriteLine($"生产者: {ProducerCount}，每个生产者: {ItemsPerProducer} 条，总计: {totalItems} 条");
+Console.WriteLine();
+
+// --- 批量入队 & TryPeek 演示 ---
+Console.WriteLine("--- 批量入队 & TryPeek 演示 ---");
+using (var demoQueue = new ConcurrentNativeQueue<long>())
+{
+    long[] batch = [100, 200, 300, 400, 500];
+    demoQueue.EnqueueRange(batch);
+    Console.WriteLine($"EnqueueRange 入队 {batch.Length} 个元素，Count = {demoQueue.Count}");
+
+    if (demoQueue.TryPeek(out long head))
+        Console.WriteLine($"TryPeek 查看头部: {head}（不移除，Count = {demoQueue.Count}）");
+
+    if (demoQueue.TryDequeue(out long first))
+        Console.WriteLine($"TryDequeue 出队: {first}，Count = {demoQueue.Count}");
+
+    if (demoQueue.TryPeek(out long newHead))
+        Console.WriteLine($"TryPeek 查看新头部: {newHead}");
+}
 Console.WriteLine();
 
 var barrier = new Barrier(ProducerCount + 1);

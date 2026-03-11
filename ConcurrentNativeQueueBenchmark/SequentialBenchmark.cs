@@ -47,4 +47,25 @@ public class SequentialBenchmark
         for (int i = 0; i < n; i++)
             _nativeQueue.TryDequeue(out _);
     }
+
+    [Benchmark]
+    public void NativeQueue_Batch()
+    {
+        int n = Count;
+        Span<long> buf = stackalloc long[Math.Min(n, 256)];
+        int remaining = n;
+        long seq = 0;
+
+        while (remaining > 0)
+        {
+            int batch = Math.Min(remaining, buf.Length);
+            for (int i = 0; i < batch; i++)
+                buf[i] = seq++;
+            _nativeQueue.EnqueueRange(buf[..batch]);
+            remaining -= batch;
+        }
+
+        for (int i = 0; i < n; i++)
+            _nativeQueue.TryDequeue(out _);
+    }
 }

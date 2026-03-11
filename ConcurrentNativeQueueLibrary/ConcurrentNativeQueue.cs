@@ -1,4 +1,4 @@
-using System.Runtime.CompilerServices;
+﻿using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace ConcurrentNativeQueueLibrary;
@@ -163,6 +163,99 @@ public unsafe struct ConcurrentNativeQueue<T> : IDisposable where T : unmanaged
 
             spin.SpinOnce();
         }
+    }
+
+    /// <summary>
+    /// 将多个元素批量入队。此方法是线程安全的，可由多个生产者并发调用。
+    /// 通过单次 CAS 占位多个槽位，分摊原子操作开销；跨段时自动分批写入。
+    /// </summary>
+    /// <param name="items">要入队的元素。</param>
+    public void EnqueueRange(ReadOnlySpan<T> items)
+    {
+        if (items.IsEmpty) return;
+
+        int index = 0;
+        SpinWait spin = default;
+
+        while (index < items.Length)
+        {
+            Segment tail = Volatile.Read(ref _tail);
+            long pos = Volatile.Read(ref tail.EnqueuePos.Value);
+            long offset = pos - tail.BaseIndex;
+
+            if ((ulong)offset >= (ulong)tail.Capacity)
+            {
+                if (Volatile.Read(ref tail.Next) == null)
+                {
+                    var newSeg = new Segment(_segmentSize, tail.BaseIndex + tail.Capacity);
+                    if (Interlocked.CompareExchange(ref tail.Next, newSeg, null) != null)
+                        newSeg.FreeSlots();
+                }
+
+                Segment? next = Volatile.Read(ref tail.Next);
+                if (next != null)
+                    Interlocked.CompareExchange(ref _tail, next, tail);
+
+                spin.SpinOnce();
+                continue;
+            }
+
+            int available = (int)(tail.Capacity - offset);
+            int batchSize = Math.Min(items.Length - index, available);
+
+            if (Interlocked.CompareExchange(ref tail.EnqueuePos.Value, pos + batchSize, pos) == pos)
+            {
+                Slot* slots = tail.Slots;
+                int baseSlot = (int)offset;
+
+                for (int i = 0; i < batchSize; i++)
+                    slots[baseSlot + i].Value = items[index + i];
+
+                Thread.MemoryBarrier();
+
+                for (int i = 0; i < batchSize; i++)
+                    slots[baseSlot + i].State = 1;
+
+                index += batchSize;
+                spin = default;
+            }
+            else
+            {
+                spin.SpinOnce();
+            }
+        }
+    }
+
+    /// <summary>
+    /// 尝试查看队列头部的元素但不移除它。此方法仅供单个消费者调用。
+    /// </summary>
+    /// <returns>如果成功查看返回 <c>true</c>，队列为空时返回 <c>false</c>。</returns>
+    public readonly bool TryPeek(out T item)
+    {
+        Segment head = _head;
+        long pos = _dequeuePos;
+        long offset = pos - head.BaseIndex;
+
+        while (offset >= head.Capacity)
+        {
+            Segment? next = Volatile.Read(ref head.Next);
+            if (next == null)
+            {
+                item = default;
+                return false;
+            }
+            head = next;
+            offset = pos - head.BaseIndex;
+        }
+
+        if (Volatile.Read(ref head.Slots[offset].State) != 1)
+        {
+            item = default;
+            return false;
+        }
+
+        item = head.Slots[offset].Value;
+        return true;
     }
 
     /// <summary>

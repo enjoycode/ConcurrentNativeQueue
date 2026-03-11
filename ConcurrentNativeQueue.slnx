@@ -1,5 +1,9 @@
 <Solution>
   <Project Path="ConcurrentNativeQueueLibrary/ConcurrentNativeQueueLibrary.csproj" />
+  <Folder Name="/Solution Items/">
+    <File Path="README.en-US.md" />
+    <File Path="README.md" />
+  </Folder>
   <Project Path="ConcurrentNativeQueueBenchmark/ConcurrentNativeQueueBenchmark.csproj" />
   <Project Path="ConcurrentNativeQueueDemo/ConcurrentNativeQueueDemo.csproj" />
   <Project Path="ConcurrentNativeQueueUnitTest/ConcurrentNativeQueueUnitTest.csproj" />

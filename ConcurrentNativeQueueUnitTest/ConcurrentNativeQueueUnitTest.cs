@@ -321,6 +321,201 @@ public class ConcurrentNativeQueueUnitTest
 
     #endregion
 
+    #region TryPeek
+
+    [Fact]
+    public void TryPeek_EmptyQueue_ReturnsFalse()
+    {
+        using var queue = new ConcurrentNativeQueue<int>();
+
+        Assert.False(queue.TryPeek(out int item));
+        Assert.Equal(0, item);
+    }
+
+    [Fact]
+    public void TryPeek_SingleItem_ReturnsValueWithoutRemoving()
+    {
+        using var queue = new ConcurrentNativeQueue<int>();
+        queue.Enqueue(42);
+
+        Assert.True(queue.TryPeek(out int item));
+        Assert.Equal(42, item);
+        Assert.Equal(1, queue.Count);
+
+        Assert.True(queue.TryPeek(out int item2));
+        Assert.Equal(42, item2);
+    }
+
+    [Fact]
+    public void TryPeek_ThenDequeue_SameValue()
+    {
+        using var queue = new ConcurrentNativeQueue<int>();
+        queue.Enqueue(10);
+        queue.Enqueue(20);
+
+        Assert.True(queue.TryPeek(out int peeked));
+        Assert.True(queue.TryDequeue(out int dequeued));
+        Assert.Equal(peeked, dequeued);
+        Assert.Equal(10, dequeued);
+
+        Assert.True(queue.TryPeek(out int next));
+        Assert.Equal(20, next);
+    }
+
+    [Fact]
+    public void TryPeek_AfterSegmentTransition_CorrectValue()
+    {
+        using var queue = new ConcurrentNativeQueue<int>(4);
+
+        for (int i = 0; i < 6; i++)
+            queue.Enqueue(i);
+        for (int i = 0; i < 4; i++)
+            queue.TryDequeue(out _);
+
+        Assert.True(queue.TryPeek(out int item));
+        Assert.Equal(4, item);
+    }
+
+    #endregion
+
+    #region EnqueueRange
+
+    [Fact]
+    public void EnqueueRange_EmptySpan_NoEffect()
+    {
+        using var queue = new ConcurrentNativeQueue<int>();
+        queue.EnqueueRange(ReadOnlySpan<int>.Empty);
+
+        Assert.Equal(0, queue.Count);
+        Assert.True(queue.IsEmpty);
+    }
+
+    [Fact]
+    public void EnqueueRange_SingleItem_Works()
+    {
+        using var queue = new ConcurrentNativeQueue<int>();
+        queue.EnqueueRange([42]);
+
+        Assert.Equal(1, queue.Count);
+        Assert.True(queue.TryDequeue(out int item));
+        Assert.Equal(42, item);
+    }
+
+    [Fact]
+    public void EnqueueRange_FIFO_Order()
+    {
+        using var queue = new ConcurrentNativeQueue<int>();
+        int[] items = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        queue.EnqueueRange(items);
+
+        Assert.Equal(10, queue.Count);
+
+        for (int i = 0; i < items.Length; i++)
+        {
+            Assert.True(queue.TryDequeue(out int item));
+            Assert.Equal(items[i], item);
+        }
+    }
+
+    [Fact]
+    public void EnqueueRange_SpanningMultipleSegments()
+    {
+        using var queue = new ConcurrentNativeQueue<int>(4);
+        int[] items = new int[20];
+        for (int i = 0; i < items.Length; i++)
+            items[i] = i * 10;
+
+        queue.EnqueueRange(items);
+
+        Assert.Equal(20, queue.Count);
+        for (int i = 0; i < items.Length; i++)
+        {
+            Assert.True(queue.TryDequeue(out int item));
+            Assert.Equal(i * 10, item);
+        }
+    }
+
+    [Fact]
+    public void EnqueueRange_MixedWithSingleEnqueue()
+    {
+        using var queue = new ConcurrentNativeQueue<int>();
+
+        queue.Enqueue(0);
+        queue.EnqueueRange([1, 2, 3]);
+        queue.Enqueue(4);
+        queue.EnqueueRange([5, 6]);
+
+        for (int i = 0; i <= 6; i++)
+        {
+            Assert.True(queue.TryDequeue(out int item));
+            Assert.Equal(i, item);
+        }
+    }
+
+    [Fact]
+    public void EnqueueRange_LargeStruct_DataIntact()
+    {
+        using var queue = new ConcurrentNativeQueue<Vector3D>(4);
+        var items = new Vector3D[15];
+        for (int i = 0; i < items.Length; i++)
+            items[i] = new Vector3D(i, -i, i * 0.5);
+
+        queue.EnqueueRange(items);
+
+        for (int i = 0; i < items.Length; i++)
+        {
+            Assert.True(queue.TryDequeue(out var item));
+            Assert.Equal(new Vector3D(i, -i, i * 0.5), item);
+        }
+    }
+
+    [Fact]
+    public void EnqueueRange_MPSC_AllItemsReceived()
+    {
+        using var queue = new ConcurrentNativeQueue<long>(8);
+        const int producerCount = 4;
+        const int batchSize = 100;
+        const int batchCount = 50;
+
+        int totalExpected = producerCount * batchSize * batchCount;
+        var barrier = new Barrier(producerCount + 1);
+        var tasks = new Task[producerCount];
+
+        for (int p = 0; p < producerCount; p++)
+        {
+            int pid = p;
+            tasks[p] = Task.Run(() =>
+            {
+                barrier.SignalAndWait();
+                long[] batch = new long[batchSize];
+                for (int b = 0; b < batchCount; b++)
+                {
+                    for (int i = 0; i < batchSize; i++)
+                        batch[i] = (long)pid * batchSize * batchCount + b * batchSize + i;
+                    queue.EnqueueRange(batch);
+                }
+            });
+        }
+
+        var received = new HashSet<long>();
+        var consumerTask = Task.Run(() =>
+        {
+            barrier.SignalAndWait();
+            while (received.Count < totalExpected)
+            {
+                if (queue.TryDequeue(out long item))
+                    received.Add(item);
+                else
+                    Thread.SpinWait(10);
+            }
+        });
+
+        Task.WaitAll([.. tasks, consumerTask]);
+        Assert.Equal(totalExpected, received.Count);
+    }
+
+    #endregion
+
     #region 并发 MPSC 测试
 
     [Fact]

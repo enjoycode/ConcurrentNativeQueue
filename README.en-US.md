@@ -14,10 +14,12 @@ Slot data is allocated via `NativeMemory` with **zero GC pressure**. New segment
 
 ## Features
 
-- **Lock-free concurrency** — Enqueue claims a slot via `Interlocked.Increment` and writes directly; no CAS retry loops required
+- **Lock-free concurrency** — Enqueue claims a slot via `Volatile.Read` + `Interlocked.CompareExchange` (CAS); full-segment detection is a pure read with no atomic write overhead
+- **Batch enqueue** — `EnqueueRange` claims multiple slots in a single CAS, amortizing atomic operation cost; automatically splits across segments
 - **Segmented linked list** — Fixed-size segments are allocated and linked on demand; O(1) new segment creation when full, no global pauses or buffer migration
 - **Native memory** — Slot data allocated via `NativeMemory.AllocZeroed`; no managed heap allocations
 - **Automatic reclamation** — Consumed segments automatically free their native memory; segment metadata is GC-managed to ensure concurrent safety
+- **False sharing prevention** — Producer/consumer hot fields are isolated via cache-line padding; `EnqueuePos` uses a 128-byte exclusive layout
 - **FIFO ordering** — Strict FIFO from a single producer's perspective; per-producer ordering is preserved across multiple producers
 - **Unmanaged type constraint** — `where T : unmanaged`; supports `int`, `long`, custom value-type structs, etc.
 
@@ -32,6 +34,13 @@ using var queue = new ConcurrentNativeQueue<long>();
 // Producer thread enqueues
 queue.Enqueue(42);
 queue.Enqueue(100);
+
+// Batch enqueue
+queue.EnqueueRange(new long[] { 200, 300, 400 });
+
+// Peek at the head element (without removing)
+if (queue.TryPeek(out long head))
+    Console.WriteLine(head); // 42
 
 // Consumer thread dequeues
 if (queue.TryDequeue(out long item))
@@ -88,6 +97,8 @@ Task.WaitAll(tasks);
 | `ConcurrentNativeQueue()` | Creates a queue with the default segment size of 32 |
 | `ConcurrentNativeQueue(int segmentSize)` | Creates a queue with the specified segment size (minimum 2) |
 | `void Enqueue(T item)` | Enqueues an item. Thread-safe for multiple concurrent producers. Allocates a new segment when full |
+| `void EnqueueRange(ReadOnlySpan<T> items)` | Batch enqueue. Claims multiple slots in a single CAS; auto-splits across segments. Thread-safe |
+| `bool TryPeek(out T item)` | Peeks at the head element without removing it. Returns `true` on success; `false` if empty. Single-consumer only |
 | `bool TryDequeue(out T item)` | Dequeues an item. Returns `true` on success; `false` if the queue is empty. Single-consumer only |
 | `int Count` | Current number of elements (approximate under concurrency) |
 | `bool IsEmpty` | Whether the queue is empty |
@@ -102,7 +113,9 @@ The queue consists of fixed-size segments, each containing a native memory slot 
 - `State == 0` — slot is empty, not yet written
 - `State == 1` — data is ready for consumption
 
-Producers atomically increment the segment's `EnqueuePos` via `Interlocked.Increment` to claim a unique write position — no CAS retry needed. After writing data, the producer sets `State = 1` to signal the consumer.
+Producers read the current `EnqueuePos` via `Volatile.Read`, then atomically claim a slot using `Interlocked.CompareExchange` (CAS). Full-segment detection is a pure read with no atomic write overhead. After writing data, the producer sets `State = 1` via `Volatile.Write` to signal the consumer.
+
+`EnqueueRange` further optimizes this: a single CAS claims N slots at once, values are written in bulk, followed by a `Thread.MemoryBarrier()`, then all States are set — reducing N atomic operations to ⌈N / remaining segment capacity⌉.
 
 ### Segment Lifecycle
 
@@ -116,7 +129,7 @@ Segment metadata uses a managed `class`, with the GC tracking all references to 
 
 | Aspect | Old (Ring Buffer) | New (Segmented Linked List) |
 |---|---|---|
-| Atomic ops per operation | `Interlocked.Inc` + CAS + `Interlocked.Dec` = 3 | `Interlocked.Inc` to claim slot = 1 |
+| Atomic ops per operation | `Interlocked.Inc` + CAS + `Interlocked.Dec` = 3 | CAS to claim slot = 1 (`EnqueueRange`: 1 CAS for N slots) |
 | Growth strategy | Stop-the-world + O(N) migration | Allocate new segment O(1), CAS link |
 | Shrink strategy | Explicit TryShrink + O(N) migration | Automatic free after consumption |
 
@@ -130,7 +143,8 @@ ConcurrentNativeQueue/
 │   └── Program.cs
 ├── ConcurrentNativeQueueBenchmark/   # BenchmarkDotNet benchmarks
 │   ├── MpscBenchmark.cs              #   MPSC concurrent throughput vs ConcurrentQueue
-│   ├── SequentialBenchmark.cs        #   Single-thread sequential throughput vs ConcurrentQueue
+│   ├── SequentialBenchmark.cs        #   Single-thread sequential throughput vs ConcurrentQueue (incl. batch)
+│   ├── BatchEnqueueBenchmark.cs      #   EnqueueRange vs per-item Enqueue throughput
 │   └── SegmentSizeBenchmark.cs       #   Segment size impact on throughput
 └── ConcurrentNativeQueueUnitTest/    # xUnit unit tests
     └── ConcurrentNativeQueueUnitTest.cs
