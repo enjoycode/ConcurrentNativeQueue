@@ -14,22 +14,24 @@ internal struct PaddedLong
 }
 
 /// <summary>
-/// 一个线程安全的无锁原生队列，用于在并发环境中存储非托管类型。
+/// 一个完全原生化的线程安全无锁队列，用于在并发环境中存储非托管类型。
 /// </summary>
 /// <remarks>
-/// 此结构是一个MPSC多生产者单消费者的CAS无锁队列，旨在为非托管类型的队列提供高效的并发访问。<br/>
-/// 使用分段链表设计，每个段是固定大小的原生内存槽位数组：<br/>
+/// 此结构是一个 MPSC（多生产者单消费者）CAS 无锁队列，零 GC 压力。<br/>
+/// 所有内存（段头 + 槽位数组）均通过 <see cref="NativeMemory"/> 分配，不产生任何托管堆分配：<br/>
 /// - 入队快速路径：Volatile.Read 检测可用位置 → CAS 占位 → 写入数据；<br/>
-/// - 段满检测为纯读操作（Volatile.Read），不产生任何原子写开销；<br/>
-/// - 段满时自动分配新段并链接到尾部，无需全局暂停或缓冲区迁移；<br/>
-/// - 段被完全消费后自动释放其原生内存，不产生 GC 压力。<br/>
-/// 段元数据为托管对象（由 GC 管理生命周期，确保并发安全），槽位数据使用 <see cref="NativeMemory"/> 分配。<br/>
+/// - 段满检测为纯读操作，不产生原子写开销；<br/>
+/// - 段满时自动分配新段并链接到尾部，段大小指数增长（减少段切换频率）；<br/>
+/// - 槽位数组在段被完全消费后由消费者立即释放；<br/>
+/// - 段头结构体延迟到 <see cref="Dispose"/> 时统一释放（生产者可能持有旧段指针，
+///   无法在消费后立即安全回收段头——这是无锁 Native 设计中最核心的生命周期问题）。<br/>
 /// 生产者与消费者的热点字段通过缓存行填充隔离，消除 false sharing。
 /// </remarks>
-/// <typeparam name="T">指定队列中元素的类型。该类型必须是非托管类型，即不包含任何引用类型。</typeparam>
+/// <typeparam name="T">指定队列中元素的类型。该类型必须是非托管类型。</typeparam>
 public unsafe struct ConcurrentNativeQueue<T> : IDisposable where T : unmanaged
 {
     private const int DefaultSegmentSize = 32;
+    private const int MaxSegmentSize = 1024 * 1024;
 
     private struct Slot
     {
@@ -38,52 +40,33 @@ public unsafe struct ConcurrentNativeQueue<T> : IDisposable where T : unmanaged
     }
 
     /// <summary>
-    /// 段元数据使用托管对象，由 GC 跟踪引用：即使生产者持有对旧段的引用，
-    /// 该段也不会被回收，从而避免 use-after-free。
-    /// 槽位数组使用 NativeMemory 分配，在段消费完毕后手动释放。
-    /// EnqueuePos 通过 <see cref="PaddedLong"/> 隔离到独立缓存行，
-    /// 避免与只读元数据（Capacity、BaseIndex 等）产生 false sharing。
+    /// 段头 — 通过 NativeMemory 分配的纯原生结构体。<br/>
+    /// 槽位数组在段消费完后由消费者立即释放（安全：所有 State==1 意味着所有生产者已写完）。<br/>
+    /// 段头本身延迟到 Dispose 统一释放，因为生产者可能在任意时刻被抢占并持有旧段指针，
+    /// 在此期间仍需读取 EnqueuePos / Next 等元数据字段。<br/>
+    /// EnqueuePos 通过 <see cref="PaddedLong"/> 隔离到独立缓存行。
     /// </summary>
-    private sealed class Segment
+    private struct SegmentHeader
     {
         internal Slot* Slots;
-        internal readonly int Capacity;
-        internal readonly long BaseIndex;
-        internal Segment? Next;
-
+        internal int Capacity;
+        internal int NextCapacity;
+        internal long BaseIndex;
+        internal nint Next;
         internal PaddedLong EnqueuePos;
-
-        internal Segment(int capacity, long baseIndex)
-        {
-            Capacity = capacity;
-            BaseIndex = baseIndex;
-            EnqueuePos.Value = baseIndex;
-            Slots = (Slot*)NativeMemory.AllocZeroed((nuint)capacity, (nuint)sizeof(Slot));
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal void FreeSlots()
-        {
-            Slot* s = Slots;
-            if (s != null)
-            {
-                Slots = null;
-                NativeMemory.Free(s);
-            }
-        }
     }
 
-    // == 消费者缓存行 ==
-    private Segment _head;
+    // ── 消费者缓存行 ──
+    private SegmentHeader* _head;
     private long _dequeuePos;
-    private readonly int _segmentSize;
+    private SegmentHeader* _origin;
 
 #pragma warning disable CS0169
     private long _p0, _p1, _p2, _p3, _p4, _p5, _p6, _p7;
 #pragma warning restore CS0169
 
-    // == 生产者缓存行 ==
-    private Segment _tail;
+    // ── 生产者缓存行 ──
+    private nint _tail;
 
     public ConcurrentNativeQueue() : this(DefaultSegmentSize) { }
 
@@ -96,10 +79,33 @@ public unsafe struct ConcurrentNativeQueue<T> : IDisposable where T : unmanaged
             throw new ArgumentOutOfRangeException(nameof(segmentSize), segmentSize, "Segment size must be greater than 0.");
 #endif
         this = default;
-        _segmentSize = Math.Max(2, segmentSize);
-        var initial = new Segment(_segmentSize, 0);
+        int cap = Math.Max(2, segmentSize);
+        SegmentHeader* initial = AllocSegment(cap, 0, Math.Min(cap * 2, MaxSegmentSize));
         _head = initial;
-        _tail = initial;
+        _tail = (nint)initial;
+        _origin = initial;
+    }
+
+    private static SegmentHeader* AllocSegment(int capacity, long baseIndex, int nextCapacity)
+    {
+        var seg = (SegmentHeader*)NativeMemory.AllocZeroed(1, (nuint)sizeof(SegmentHeader));
+        seg->Slots = (Slot*)NativeMemory.AllocZeroed((nuint)capacity, (nuint)sizeof(Slot));
+        seg->Capacity = capacity;
+        seg->NextCapacity = nextCapacity;
+        seg->BaseIndex = baseIndex;
+        seg->EnqueuePos.Value = baseIndex;
+        return seg;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void FreeSlots(SegmentHeader* seg)
+    {
+        Slot* s = seg->Slots;
+        if (s != null)
+        {
+            seg->Slots = null;
+            NativeMemory.Free(s);
+        }
     }
 
     /// <summary>当前队列中的元素数量（近似值，在并发场景下可能瞬间不精确）。</summary>
@@ -108,9 +114,9 @@ public unsafe struct ConcurrentNativeQueue<T> : IDisposable where T : unmanaged
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get
         {
-            Segment tail = Volatile.Read(ref _tail);
-            long enqPos = Volatile.Read(ref tail.EnqueuePos.Value);
-            long cap = tail.BaseIndex + tail.Capacity;
+            SegmentHeader* tail = (SegmentHeader*)Volatile.Read(ref _tail);
+            long enqPos = Volatile.Read(ref tail->EnqueuePos.Value);
+            long cap = tail->BaseIndex + tail->Capacity;
             long count = Math.Min(enqPos, cap) - Volatile.Read(ref _dequeuePos);
             return (int)Math.Max(count, 0);
         }
@@ -125,7 +131,7 @@ public unsafe struct ConcurrentNativeQueue<T> : IDisposable where T : unmanaged
 
     /// <summary>
     /// 将元素入队。此方法是线程安全的，可由多个生产者并发调用。
-    /// 当段已满时自动分配新段，无需缓冲区迁移或全局暂停。
+    /// 当段已满时自动分配新段（容量指数增长），无需缓冲区迁移或全局暂停。
     /// </summary>
     public void Enqueue(T item)
     {
@@ -133,31 +139,21 @@ public unsafe struct ConcurrentNativeQueue<T> : IDisposable where T : unmanaged
 
         while (true)
         {
-            Segment tail = Volatile.Read(ref _tail);
-            long pos = Volatile.Read(ref tail.EnqueuePos.Value);
-            long offset = pos - tail.BaseIndex;
+            SegmentHeader* tail = (SegmentHeader*)Volatile.Read(ref _tail);
+            long pos = Volatile.Read(ref tail->EnqueuePos.Value);
+            long offset = pos - tail->BaseIndex;
 
-            if ((ulong)offset >= (ulong)tail.Capacity)
+            if ((ulong)offset >= (ulong)tail->Capacity)
             {
-                if (Volatile.Read(ref tail.Next) == null)
-                {
-                    var newSeg = new Segment(_segmentSize, tail.BaseIndex + tail.Capacity);
-                    if (Interlocked.CompareExchange(ref tail.Next, newSeg, null) != null)
-                        newSeg.FreeSlots();
-                }
-
-                Segment? next = Volatile.Read(ref tail.Next);
-                if (next != null)
-                    Interlocked.CompareExchange(ref _tail, next, tail);
-
+                TryAdvanceTail(tail);
                 spin.SpinOnce();
                 continue;
             }
 
-            if (Interlocked.CompareExchange(ref tail.EnqueuePos.Value, pos + 1, pos) == pos)
+            if (Interlocked.CompareExchange(ref tail->EnqueuePos.Value, pos + 1, pos) == pos)
             {
-                tail.Slots[offset].Value = item;
-                Volatile.Write(ref tail.Slots[offset].State, 1);
+                tail->Slots[offset].Value = item;
+                Volatile.Write(ref tail->Slots[offset].State, 1);
                 return;
             }
 
@@ -169,7 +165,6 @@ public unsafe struct ConcurrentNativeQueue<T> : IDisposable where T : unmanaged
     /// 将多个元素批量入队。此方法是线程安全的，可由多个生产者并发调用。
     /// 通过单次 CAS 占位多个槽位，分摊原子操作开销；跨段时自动分批写入。
     /// </summary>
-    /// <param name="items">要入队的元素。</param>
     public void EnqueueRange(ReadOnlySpan<T> items)
     {
         if (items.IsEmpty) return;
@@ -179,33 +174,23 @@ public unsafe struct ConcurrentNativeQueue<T> : IDisposable where T : unmanaged
 
         while (index < items.Length)
         {
-            Segment tail = Volatile.Read(ref _tail);
-            long pos = Volatile.Read(ref tail.EnqueuePos.Value);
-            long offset = pos - tail.BaseIndex;
+            SegmentHeader* tail = (SegmentHeader*)Volatile.Read(ref _tail);
+            long pos = Volatile.Read(ref tail->EnqueuePos.Value);
+            long offset = pos - tail->BaseIndex;
 
-            if ((ulong)offset >= (ulong)tail.Capacity)
+            if ((ulong)offset >= (ulong)tail->Capacity)
             {
-                if (Volatile.Read(ref tail.Next) == null)
-                {
-                    var newSeg = new Segment(_segmentSize, tail.BaseIndex + tail.Capacity);
-                    if (Interlocked.CompareExchange(ref tail.Next, newSeg, null) != null)
-                        newSeg.FreeSlots();
-                }
-
-                Segment? next = Volatile.Read(ref tail.Next);
-                if (next != null)
-                    Interlocked.CompareExchange(ref _tail, next, tail);
-
+                TryAdvanceTail(tail);
                 spin.SpinOnce();
                 continue;
             }
 
-            int available = (int)(tail.Capacity - offset);
+            int available = (int)(tail->Capacity - offset);
             int batchSize = Math.Min(items.Length - index, available);
 
-            if (Interlocked.CompareExchange(ref tail.EnqueuePos.Value, pos + batchSize, pos) == pos)
+            if (Interlocked.CompareExchange(ref tail->EnqueuePos.Value, pos + batchSize, pos) == pos)
             {
-                Slot* slots = tail.Slots;
+                Slot* slots = tail->Slots;
                 int baseSlot = (int)offset;
 
                 for (int i = 0; i < batchSize; i++)
@@ -227,83 +212,120 @@ public unsafe struct ConcurrentNativeQueue<T> : IDisposable where T : unmanaged
     }
 
     /// <summary>
+    /// 段满时分配新段并推进 _tail。由生产者调用。
+    /// 新段容量指数增长（上限 <see cref="MaxSegmentSize"/>），减少段切换频率。
+    /// 失败的 CAS 会立即释放多余段（该段从未被发布，无并发访问风险）。
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void TryAdvanceTail(SegmentHeader* tail)
+    {
+        if (Volatile.Read(ref tail->Next) == (nint)0)
+        {
+            int nextCap = tail->NextCapacity;
+            SegmentHeader* newSeg = AllocSegment(
+                nextCap,
+                tail->BaseIndex + tail->Capacity,
+                Math.Min(nextCap * 2, MaxSegmentSize));
+
+            if (Interlocked.CompareExchange(ref tail->Next, (nint)newSeg, (nint)0) != (nint)0)
+            {
+                NativeMemory.Free(newSeg->Slots);
+                NativeMemory.Free(newSeg);
+            }
+        }
+
+        nint next = Volatile.Read(ref tail->Next);
+        if (next != 0)
+            Interlocked.CompareExchange(ref _tail, next, (nint)tail);
+    }
+
+    /// <summary>
     /// 尝试查看队列头部的元素但不移除它。此方法仅供单个消费者调用。
     /// </summary>
     /// <returns>如果成功查看返回 <c>true</c>，队列为空时返回 <c>false</c>。</returns>
-    public readonly bool TryPeek(out T item)
+    public bool TryPeek(out T item)
     {
-        Segment head = _head;
+        SegmentHeader* head = _head;
         long pos = _dequeuePos;
-        long offset = pos - head.BaseIndex;
+        long offset = pos - head->BaseIndex;
 
-        while (offset >= head.Capacity)
+        while (offset >= head->Capacity)
         {
-            Segment? next = Volatile.Read(ref head.Next);
-            if (next == null)
+            nint next = Volatile.Read(ref head->Next);
+            if (next == 0)
             {
                 item = default;
                 return false;
             }
-            head = next;
-            offset = pos - head.BaseIndex;
+            head = (SegmentHeader*)next;
+            offset = pos - head->BaseIndex;
         }
 
-        if (Volatile.Read(ref head.Slots[offset].State) != 1)
+        if (Volatile.Read(ref head->Slots[offset].State) != 1)
         {
             item = default;
             return false;
         }
 
-        item = head.Slots[offset].Value;
+        item = head->Slots[offset].Value;
         return true;
     }
 
     /// <summary>
     /// 尝试从队列出队一个元素。此方法仅供单个消费者调用。
-    /// 当段被完全消费后自动释放其原生内存并前进到下一段。
+    /// 当段被完全消费后立即释放其槽位数组的原生内存，并前进到下一段。
+    /// 段头结构体保留（生产者可能仍持有其指针），在 <see cref="Dispose"/> 时统一释放。
     /// </summary>
     /// <returns>如果成功出队返回 <c>true</c>，队列为空时返回 <c>false</c>。</returns>
     public bool TryDequeue(out T item)
     {
-        Segment head = _head;
+        SegmentHeader* head = _head;
         long pos = _dequeuePos;
-        long offset = pos - head.BaseIndex;
+        long offset = pos - head->BaseIndex;
 
-        while (offset >= head.Capacity)
+        while (offset >= head->Capacity)
         {
-            Segment? next = Volatile.Read(ref head.Next);
-            if (next == null)
+            nint next = Volatile.Read(ref head->Next);
+            if (next == 0)
             {
                 item = default;
                 return false;
             }
-            head.FreeSlots();
-            _head = next;
-            head = next;
-            offset = pos - head.BaseIndex;
+            FreeSlots(head);
+            head = (SegmentHeader*)next;
+            _head = head;
+            offset = pos - head->BaseIndex;
         }
 
-        if (Volatile.Read(ref head.Slots[offset].State) != 1)
+        if (Volatile.Read(ref head->Slots[offset].State) != 1)
         {
             item = default;
             return false;
         }
 
-        item = head.Slots[offset].Value;
+        item = head->Slots[offset].Value;
         _dequeuePos = pos + 1;
         return true;
     }
 
+    /// <summary>
+    /// 释放所有段的原生内存（槽位数组 + 段头结构体）。
+    /// 从 <c>_origin</c>（首段）遍历整条链表，确保不遗漏已消费但段头仍存活的旧段。
+    /// 可多次调用，不会抛出异常。
+    /// </summary>
     public void Dispose()
     {
-        Segment? seg = _head;
+        SegmentHeader* seg = _origin;
         while (seg != null)
         {
-            Segment? next = seg.Next;
-            seg.FreeSlots();
+            SegmentHeader* next = (SegmentHeader*)seg->Next;
+            if (seg->Slots != null)
+                NativeMemory.Free(seg->Slots);
+            NativeMemory.Free(seg);
             seg = next;
         }
-        _head = null!;
-        _tail = null!;
+        _head = null;
+        _tail = (nint)0;
+        _origin = null;
     }
 }
