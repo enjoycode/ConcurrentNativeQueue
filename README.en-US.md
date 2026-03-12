@@ -171,6 +171,8 @@ dotnet test
 dotnet run --project ConcurrentNativeQueueBenchmark -c Release -- --filter *
 ```
 
+For historical reports, result descriptions, and big-core affinity settings, see [benchmark-results/README.en-US.md](benchmark-results/README.en-US.md).
+
 ## Requirements
 
 - .NET SDK 6.0 or later.

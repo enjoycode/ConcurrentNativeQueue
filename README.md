@@ -171,6 +171,8 @@ dotnet test
 dotnet run --project ConcurrentNativeQueueBenchmark -c Release -- --filter *
 ```
 
+历史报告、结果说明及大小核绑定方式见 [benchmark-results/README.md](benchmark-results/README.md)。
+
 ## 要求
 
 - .NET SDK 6.0 或更高。

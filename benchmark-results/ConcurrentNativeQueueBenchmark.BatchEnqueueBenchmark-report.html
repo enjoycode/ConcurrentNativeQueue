@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+<meta charset='utf-8' />
+<title>ConcurrentNativeQueueBenchmark.BatchEnqueueBenchmark-20260312-135020</title>
+
+<style type="text/css">
+	table { border-collapse: collapse; display: block; width: 100%; overflow: auto; }
+	td, th { padding: 6px 13px; border: 1px solid #ddd; text-align: right; }
+	tr { background-color: #fff; border-top: 1px solid #ccc; }
+	tr:nth-child(even) { background: #f8f8f8; }
+</style>
+</head>
+<body>
+<pre><code>
+BenchmarkDotNet v0.15.8, Windows 11 (10.0.26200.7922/25H2/2025Update/HudsonValley2)
+Intel Core i7-14700K 3.40GHz, 1 CPU, 28 logical and 20 physical cores
+.NET SDK 10.0.103
+  [Host]     : .NET 10.0.3 (10.0.3, 10.0.326.7603), X64 RyuJIT x86-64-v3
+  Job-IIOSFQ : .NET 10.0.3 (10.0.3, 10.0.326.7603), X64 RyuJIT x86-64-v3
+  Job-QRDOQB : .NET 10.0.3 (10.0.3, 10.0.326.7603), X64 RyuJIT x86-64-v3
+  Job-BRFAHL : .NET 6.0.36 (6.0.36, 6.0.3624.51421), X64 RyuJIT x86-64-v3
+  Job-SRNOFC : .NET 6.0.36 (6.0.36, 6.0.3624.51421), X64 RyuJIT x86-64-v3
+  Job-RAPTAZ : .NET 7.0.20 (7.0.20, 7.0.2024.26716), X64 RyuJIT x86-64-v3
+  Job-JMAGVT : .NET 7.0.20 (7.0.20, 7.0.2024.26716), X64 RyuJIT x86-64-v3
+  Job-EGORRP : .NET 8.0.24 (8.0.24, 8.0.2426.7010), X64 RyuJIT x86-64-v3
+  Job-MIBEZT : .NET 8.0.24 (8.0.24, 8.0.2426.7010), X64 RyuJIT x86-64-v3
+  Job-OXFYYB : .NET 9.0.13 (9.0.13, 9.0.1326.6317), X64 RyuJIT x86-64-v3
+  Job-VMOMJC : .NET 9.0.13 (9.0.13, 9.0.1326.6317), X64 RyuJIT x86-64-v3
+</code></pre>
+<pre><code>Affinity=0000000000001111111111111111  Concurrent=True  InvocationCount=1  
+UnrollFactor=1  
+</code></pre>
+
+<table>
+<thead><tr><th>Method                      </th><th>Runtime</th><th>Server</th><th>Count</th><th>Mean</th><th>Error</th><th>StdDev</th><th>Median</th><th>Ratio</th><th>RatioSD</th><th>Allocated</th><th>Alloc Ratio</th>
+</tr>
+</thead><tbody><tr><td>ConcurrentQueue_EnqueueLoop</td><td>.NET 10.0</td><td>False</td><td>1024</td><td>19.487 &mu;s</td><td>0.7492 &mu;s</td><td>2.0884 &mu;s</td><td>18.850 &mu;s</td><td>1.01</td><td>0.14</td><td>33024 B</td><td>1.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueLoop</td><td>.NET 10.0</td><td>False</td><td>1024</td><td>14.182 &mu;s</td><td>0.5378 &mu;s</td><td>1.5169 &mu;s</td><td>13.950 &mu;s</td><td>0.74</td><td>0.10</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueRange</td><td>.NET 10.0</td><td>False</td><td>1024</td><td>9.159 &mu;s</td><td>0.5522 &mu;s</td><td>1.5843 &mu;s</td><td>8.900 &mu;s</td><td>0.47</td><td>0.09</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentQueue_EnqueueLoop</td><td>.NET 10.0</td><td>True</td><td>1024</td><td>19.665 &mu;s</td><td>1.2552 &mu;s</td><td>3.4781 &mu;s</td><td>18.400 &mu;s</td><td>1.02</td><td>0.23</td><td>33024 B</td><td>1.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueLoop</td><td>.NET 10.0</td><td>True</td><td>1024</td><td>13.683 &mu;s</td><td>0.7593 &mu;s</td><td>2.1909 &mu;s</td><td>13.100 &mu;s</td><td>0.71</td><td>0.15</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueRange</td><td>.NET 10.0</td><td>True</td><td>1024</td><td>7.884 &mu;s</td><td>0.6291 &mu;s</td><td>1.8151 &mu;s</td><td>7.400 &mu;s</td><td>0.41</td><td>0.11</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentQueue_EnqueueLoop</td><td>.NET 6.0</td><td>False</td><td>1024</td><td>10.224 &mu;s</td><td>0.2021 &mu;s</td><td>0.2406 &mu;s</td><td>10.100 &mu;s</td><td>1.00</td><td>0.03</td><td>33024 B</td><td>1.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueLoop</td><td>.NET 6.0</td><td>False</td><td>1024</td><td>9.249 &mu;s</td><td>0.1774 &mu;s</td><td>0.4826 &mu;s</td><td>9.200 &mu;s</td><td>0.91</td><td>0.05</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueRange</td><td>.NET 6.0</td><td>False</td><td>1024</td><td>3.244 &mu;s</td><td>0.1841 &mu;s</td><td>0.5252 &mu;s</td><td>3.200 &mu;s</td><td>0.32</td><td>0.05</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentQueue_EnqueueLoop</td><td>.NET 6.0</td><td>True</td><td>1024</td><td>10.535 &mu;s</td><td>0.2132 &mu;s</td><td>0.5690 &mu;s</td><td>10.300 &mu;s</td><td>1.00</td><td>0.07</td><td>33024 B</td><td>1.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueLoop</td><td>.NET 6.0</td><td>True</td><td>1024</td><td>9.722 &mu;s</td><td>0.2005 &mu;s</td><td>0.5881 &mu;s</td><td>9.700 &mu;s</td><td>0.93</td><td>0.07</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueRange</td><td>.NET 6.0</td><td>True</td><td>1024</td><td>4.289 &mu;s</td><td>0.2379 &mu;s</td><td>0.7015 &mu;s</td><td>4.300 &mu;s</td><td>0.41</td><td>0.07</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentQueue_EnqueueLoop</td><td>.NET 7.0</td><td>False</td><td>1024</td><td>14.228 &mu;s</td><td>0.3824 &mu;s</td><td>1.1095 &mu;s</td><td>13.700 &mu;s</td><td>1.01</td><td>0.11</td><td>33024 B</td><td>1.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueLoop</td><td>.NET 7.0</td><td>False</td><td>1024</td><td>11.838 &mu;s</td><td>0.4169 &mu;s</td><td>1.2228 &mu;s</td><td>11.500 &mu;s</td><td>0.84</td><td>0.11</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueRange</td><td>.NET 7.0</td><td>False</td><td>1024</td><td>5.701 &mu;s</td><td>0.4586 &mu;s</td><td>1.3451 &mu;s</td><td>5.400 &mu;s</td><td>0.40</td><td>0.10</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentQueue_EnqueueLoop</td><td>.NET 7.0</td><td>True</td><td>1024</td><td>18.045 &mu;s</td><td>1.5211 &mu;s</td><td>4.4610 &mu;s</td><td>16.300 &mu;s</td><td>1.05</td><td>0.34</td><td>33024 B</td><td>1.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueLoop</td><td>.NET 7.0</td><td>True</td><td>1024</td><td>13.407 &mu;s</td><td>0.4001 &mu;s</td><td>1.1671 &mu;s</td><td>13.300 &mu;s</td><td>0.78</td><td>0.17</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueRange</td><td>.NET 7.0</td><td>True</td><td>1024</td><td>7.284 &mu;s</td><td>0.4247 &mu;s</td><td>1.2456 &mu;s</td><td>7.000 &mu;s</td><td>0.42</td><td>0.11</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentQueue_EnqueueLoop</td><td>.NET 8.0</td><td>False</td><td>1024</td><td>18.586 &mu;s</td><td>0.6582 &mu;s</td><td>1.8456 &mu;s</td><td>18.000 &mu;s</td><td>1.01</td><td>0.14</td><td>33024 B</td><td>1.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueLoop</td><td>.NET 8.0</td><td>False</td><td>1024</td><td>13.908 &mu;s</td><td>0.5193 &mu;s</td><td>1.4899 &mu;s</td><td>13.500 &mu;s</td><td>0.76</td><td>0.11</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueRange</td><td>.NET 8.0</td><td>False</td><td>1024</td><td>9.809 &mu;s</td><td>0.5540 &mu;s</td><td>1.6334 &mu;s</td><td>9.600 &mu;s</td><td>0.53</td><td>0.10</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentQueue_EnqueueLoop</td><td>.NET 8.0</td><td>True</td><td>1024</td><td>23.356 &mu;s</td><td>2.1902 &mu;s</td><td>6.3543 &mu;s</td><td>20.800 &mu;s</td><td>1.06</td><td>0.38</td><td>33024 B</td><td>1.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueLoop</td><td>.NET 8.0</td><td>True</td><td>1024</td><td>14.727 &mu;s</td><td>0.4929 &mu;s</td><td>1.4064 &mu;s</td><td>14.500 &mu;s</td><td>0.67</td><td>0.16</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueRange</td><td>.NET 8.0</td><td>True</td><td>1024</td><td>10.215 &mu;s</td><td>0.6059 &mu;s</td><td>1.7189 &mu;s</td><td>9.800 &mu;s</td><td>0.46</td><td>0.13</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentQueue_EnqueueLoop</td><td>.NET 9.0</td><td>False</td><td>1024</td><td>19.058 &mu;s</td><td>0.6700 &mu;s</td><td>1.8898 &mu;s</td><td>19.000 &mu;s</td><td>1.01</td><td>0.14</td><td>33024 B</td><td>1.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueLoop</td><td>.NET 9.0</td><td>False</td><td>1024</td><td>14.033 &mu;s</td><td>0.5680 &mu;s</td><td>1.6114 &mu;s</td><td>13.600 &mu;s</td><td>0.74</td><td>0.11</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueRange</td><td>.NET 9.0</td><td>False</td><td>1024</td><td>8.343 &mu;s</td><td>0.5250 &mu;s</td><td>1.4809 &mu;s</td><td>8.100 &mu;s</td><td>0.44</td><td>0.09</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentQueue_EnqueueLoop</td><td>.NET 9.0</td><td>True</td><td>1024</td><td>19.546 &mu;s</td><td>1.2934 &mu;s</td><td>3.4747 &mu;s</td><td>18.300 &mu;s</td><td>1.02</td><td>0.23</td><td>33024 B</td><td>1.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueLoop</td><td>.NET 9.0</td><td>True</td><td>1024</td><td>13.324 &mu;s</td><td>0.6540 &mu;s</td><td>1.8554 &mu;s</td><td>12.400 &mu;s</td><td>0.70</td><td>0.14</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueRange</td><td>.NET 9.0</td><td>True</td><td>1024</td><td>8.205 &mu;s</td><td>0.7331 &mu;s</td><td>2.0915 &mu;s</td><td>7.500 &mu;s</td><td>0.43</td><td>0.12</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentQueue_EnqueueLoop</td><td>.NET 10.0</td><td>False</td><td>65536</td><td>748.750 &mu;s</td><td>12.9039 &mu;s</td><td>10.0745 &mu;s</td><td>746.600 &mu;s</td><td>1.00</td><td>0.02</td><td>2098944 B</td><td>1.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueLoop</td><td>.NET 10.0</td><td>False</td><td>65536</td><td>629.900 &mu;s</td><td>12.0596 &mu;s</td><td>11.2806 &mu;s</td><td>625.700 &mu;s</td><td>0.84</td><td>0.02</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueRange</td><td>.NET 10.0</td><td>False</td><td>65536</td><td>242.973 &mu;s</td><td>4.4167 &mu;s</td><td>8.2955 &mu;s</td><td>241.500 &mu;s</td><td>0.32</td><td>0.01</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentQueue_EnqueueLoop</td><td>.NET 10.0</td><td>True</td><td>65536</td><td>757.938 &mu;s</td><td>8.1489 &mu;s</td><td>6.8047 &mu;s</td><td>755.900 &mu;s</td><td>1.00</td><td>0.01</td><td>2098944 B</td><td>1.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueLoop</td><td>.NET 10.0</td><td>True</td><td>65536</td><td>641.269 &mu;s</td><td>12.7329 &mu;s</td><td>12.5055 &mu;s</td><td>636.750 &mu;s</td><td>0.85</td><td>0.02</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueRange</td><td>.NET 10.0</td><td>True</td><td>65536</td><td>231.456 &mu;s</td><td>4.5769 &mu;s</td><td>6.1100 &mu;s</td><td>231.400 &mu;s</td><td>0.31</td><td>0.01</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentQueue_EnqueueLoop</td><td>.NET 6.0</td><td>False</td><td>65536</td><td>778.285 &mu;s</td><td>5.2589 &mu;s</td><td>4.3914 &mu;s</td><td>777.400 &mu;s</td><td>1.00</td><td>0.01</td><td>2098944 B</td><td>1.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueLoop</td><td>.NET 6.0</td><td>False</td><td>65536</td><td>633.350 &mu;s</td><td>7.2833 &mu;s</td><td>6.4565 &mu;s</td><td>632.100 &mu;s</td><td>0.81</td><td>0.01</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueRange</td><td>.NET 6.0</td><td>False</td><td>65536</td><td>241.056 &mu;s</td><td>4.5837 &mu;s</td><td>11.4150 &mu;s</td><td>238.600 &mu;s</td><td>0.31</td><td>0.01</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentQueue_EnqueueLoop</td><td>.NET 6.0</td><td>True</td><td>65536</td><td>788.356 &mu;s</td><td>14.7476 &mu;s</td><td>15.7797 &mu;s</td><td>782.350 &mu;s</td><td>1.00</td><td>0.03</td><td>2098944 B</td><td>1.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueLoop</td><td>.NET 6.0</td><td>True</td><td>65536</td><td>612.080 &mu;s</td><td>4.7895 &mu;s</td><td>4.4801 &mu;s</td><td>611.300 &mu;s</td><td>0.78</td><td>0.02</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueRange</td><td>.NET 6.0</td><td>True</td><td>65536</td><td>227.042 &mu;s</td><td>4.4486 &mu;s</td><td>4.9446 &mu;s</td><td>225.400 &mu;s</td><td>0.29</td><td>0.01</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentQueue_EnqueueLoop</td><td>.NET 7.0</td><td>False</td><td>65536</td><td>877.171 &mu;s</td><td>17.4620 &mu;s</td><td>15.4796 &mu;s</td><td>875.600 &mu;s</td><td>1.00</td><td>0.02</td><td>2098944 B</td><td>1.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueLoop</td><td>.NET 7.0</td><td>False</td><td>65536</td><td>708.154 &mu;s</td><td>14.1141 &mu;s</td><td>11.7859 &mu;s</td><td>707.000 &mu;s</td><td>0.81</td><td>0.02</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueRange</td><td>.NET 7.0</td><td>False</td><td>65536</td><td>243.212 &mu;s</td><td>4.8445 &mu;s</td><td>7.6839 &mu;s</td><td>242.000 &mu;s</td><td>0.28</td><td>0.01</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentQueue_EnqueueLoop</td><td>.NET 7.0</td><td>True</td><td>65536</td><td>883.900 &mu;s</td><td>15.3074 &mu;s</td><td>12.7823 &mu;s</td><td>885.500 &mu;s</td><td>1.00</td><td>0.02</td><td>2098944 B</td><td>1.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueLoop</td><td>.NET 7.0</td><td>True</td><td>65536</td><td>701.536 &mu;s</td><td>5.8413 &mu;s</td><td>5.1782 &mu;s</td><td>700.800 &mu;s</td><td>0.79</td><td>0.01</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueRange</td><td>.NET 7.0</td><td>True</td><td>65536</td><td>239.995 &mu;s</td><td>4.6758 &mu;s</td><td>5.7424 &mu;s</td><td>239.700 &mu;s</td><td>0.27</td><td>0.01</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentQueue_EnqueueLoop</td><td>.NET 8.0</td><td>False</td><td>65536</td><td>797.492 &mu;s</td><td>15.5760 &mu;s</td><td>20.7935 &mu;s</td><td>790.300 &mu;s</td><td>1.00</td><td>0.04</td><td>2098944 B</td><td>1.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueLoop</td><td>.NET 8.0</td><td>False</td><td>65536</td><td>631.182 &mu;s</td><td>12.1351 &mu;s</td><td>19.5960 &mu;s</td><td>622.750 &mu;s</td><td>0.79</td><td>0.03</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueRange</td><td>.NET 8.0</td><td>False</td><td>65536</td><td>234.894 &mu;s</td><td>4.6999 &mu;s</td><td>12.4634 &mu;s</td><td>231.300 &mu;s</td><td>0.29</td><td>0.02</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentQueue_EnqueueLoop</td><td>.NET 8.0</td><td>True</td><td>65536</td><td>788.100 &mu;s</td><td>15.5964 &mu;s</td><td>24.7376 &mu;s</td><td>779.300 &mu;s</td><td>1.00</td><td>0.04</td><td>2098944 B</td><td>1.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueLoop</td><td>.NET 8.0</td><td>True</td><td>65536</td><td>630.200 &mu;s</td><td>12.1933 &mu;s</td><td>10.8090 &mu;s</td><td>624.750 &mu;s</td><td>0.80</td><td>0.03</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueRange</td><td>.NET 8.0</td><td>True</td><td>65536</td><td>223.238 &mu;s</td><td>4.4410 &mu;s</td><td>4.3616 &mu;s</td><td>222.450 &mu;s</td><td>0.28</td><td>0.01</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentQueue_EnqueueLoop</td><td>.NET 9.0</td><td>False</td><td>65536</td><td>773.379 &mu;s</td><td>14.8395 &mu;s</td><td>28.9433 &mu;s</td><td>761.500 &mu;s</td><td>1.00</td><td>0.05</td><td>2098944 B</td><td>1.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueLoop</td><td>.NET 9.0</td><td>False</td><td>65536</td><td>644.984 &mu;s</td><td>12.6810 &mu;s</td><td>14.0948 &mu;s</td><td>642.500 &mu;s</td><td>0.84</td><td>0.03</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueRange</td><td>.NET 9.0</td><td>False</td><td>65536</td><td>235.693 &mu;s</td><td>4.6686 &mu;s</td><td>10.0497 &mu;s</td><td>235.650 &mu;s</td><td>0.31</td><td>0.02</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentQueue_EnqueueLoop</td><td>.NET 9.0</td><td>True</td><td>65536</td><td>764.958 &mu;s</td><td>6.6266 &mu;s</td><td>5.1736 &mu;s</td><td>766.050 &mu;s</td><td>1.00</td><td>0.01</td><td>2098944 B</td><td>1.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueLoop</td><td>.NET 9.0</td><td>True</td><td>65536</td><td>626.429 &mu;s</td><td>10.4781 &mu;s</td><td>10.7603 &mu;s</td><td>624.600 &mu;s</td><td>0.82</td><td>0.01</td><td>-</td><td>0.00</td>
+</tr><tr><td>ConcurrentNativeQueue_EnqueueRange</td><td>.NET 9.0</td><td>True</td><td>65536</td><td>238.872 &mu;s</td><td>4.7321 &mu;s</td><td>8.7712 &mu;s</td><td>238.700 &mu;s</td><td>0.31</td><td>0.01</td><td>-</td><td>0.00</td>
+</tr></tbody></table>
+</body>
+</html>
